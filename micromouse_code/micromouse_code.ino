@@ -1,7 +1,7 @@
 #include <NewPing.h>
  
 //sonar 1, enc 2,3, sonar 4 motors 5,6,7,8, sonar 9,10,11,12   
- 
+
 const int E3 = 5; ///<Motor3 Speed
 const int M3 = 8; ///<Motor3 Direction
 
@@ -35,7 +35,7 @@ int wall_dist = 10; //cm
 char speed_l = 245;
 char speed_r = 245;
 
-char speed_offset = 5;
+char speed_offset = 4;
 
 void count_l() {
   enc_l++;
@@ -45,21 +45,29 @@ void count_r() {
   enc_r++;
 }
 
-void M3_advance(char Speed){ ///<Motor3 Advance   left
+void M3_advance(char Speed) ///<Motor3 Advance
+{
  digitalWrite(M3,LOW);
  analogWrite(E3,Speed);
 }
-void M4_advance(char Speed){ ///<Motor4 Advance right
+
+void M3_back(char Speed) ///<Motor3 Back off
+{
+ digitalWrite(M3,HIGH);
+ analogWrite(E3,Speed);
+}
+
+
+void M4_advance(char Speed) ///<Motor4 Advance
+{
  digitalWrite(M4,LOW);
  analogWrite(E4,Speed);
 }
 
-void M3_back(char Speed){ ///<Motor3 Back off
- digitalWrite(M3,HIGH);
- analogWrite(E3,Speed);
-}
-void M4_back(char Speed){ ///<Motor4 Back off
- digitalWrite(M4,LOW);
+
+void M4_back(char Speed) ///<Motor4 Back off
+{
+ digitalWrite(M4,HIGH);
  analogWrite(E4,Speed);
 }
 
@@ -103,17 +111,17 @@ void move(float dist){
     delta_l = enc_l - prev_l;
     delta_r = enc_r - prev_l;
     delta = delta_r - delta_r;
-    if(delta_l > delta_r && delta >= 5)
+    if(delta_l > delta_r)
       speed_l -= speed_offset;
-    else if(delta_l < delta_r && delta >=5)
+    else if(delta_l < delta_r)
       speed_l += speed_offset;
   }
 
-  stop()
+  stop();
 }
 
 void turn_r(){
-  int pulses = (4 / (3.14f * 6.5f)) * 1900;
+  int pulses = (12 / (3.14f * 6.5f)) * 1920;
 
   int prev_l;
   int prev_r;
@@ -135,16 +143,17 @@ void turn_r(){
     delta_l = enc_l - prev_l;
     delta_r = enc_r - prev_l;
     delta = delta_r - delta_r;
+
     if(delta_l > delta_r && delta >= 5)
       speed_l -= speed_offset;
     else if(delta_l < delta_r && delta >=5)
       speed_l += speed_offset;
   }
-  stop()
+  stop();
 }
 
 void turn_l(){
-  int pulses = (4 / (3.14f * 6.5f)) * 1900;
+  int pulses = (12 / (3.14f * 6.5f)) * 1920;
 
   int prev_l;
   int prev_r;
@@ -171,7 +180,7 @@ void turn_l(){
     else if(delta_l < delta_r && delta >=5)
       speed_l += speed_offset;
   }
-  stop()
+  stop();
 }
 
 void turn_around(){
@@ -202,16 +211,23 @@ void turn_around(){
     else if(delta_l < delta_r && delta >=5)
       speed_l += speed_offset;
   }
-  stop()
+  stop();
 }
 
 void setup() {
   Serial.begin(9600);
   attachInterrupt(digitalPinToInterrupt(enc_l_pin), count_l, CHANGE);
   attachInterrupt(digitalPinToInterrupt(enc_r_pin), count_r, CHANGE);
+  pinMode(5,OUTPUT);
+  pinMode(6,OUTPUT);
+  pinMode(7,OUTPUT);
+    pinMode(8,OUTPUT);
 }
 
 void loop() {
-
+ move(100);
+ delay(1000);
+ turn_r();
+ delay(1000);
 }
 
