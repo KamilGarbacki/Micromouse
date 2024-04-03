@@ -1,4 +1,6 @@
 #include <NewPing.h>
+#include "Flood_fill_algorithm.h"
+
  
 //sonar 1, enc 2,3, sonar 4 motors 5,6,7,8, sonar 9,10,11,12   
 
@@ -221,13 +223,40 @@ void setup() {
   pinMode(5,OUTPUT);
   pinMode(6,OUTPUT);
   pinMode(7,OUTPUT);
-    pinMode(8,OUTPUT);
+  pinMode(8,OUTPUT);
+
+  Cell maze[4][6];
+
+  for (int i = 0; i < 4; i++) {
+      //std::vector<Cell> temp;
+      for (int j = 0; j < 6; j++) {
+          //temp.push_back(Cell(i,j,-1));
+          maze[i][j] = Cell(i,j,-1);
+      }
+      //maze.push_back(temp);
+  }
+
+  Queue q;
+  Cell goal(2, 4, 0);
+
+  maze[goal.get_y()][goal.get_x()].val = 0;
+
+  q.push(goal);
+  flood_fill(maze, q, 4, 6);
+  
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 6; j++) {
+      Serial.print(maze[i][j].val);
+    }
+    Serial.println();
+  }
 }
 
 void loop() {
- move(100);
+
+ //move(100);
  delay(1000);
- turn_r();
+ //turn_r();
  delay(1000);
 }
 
