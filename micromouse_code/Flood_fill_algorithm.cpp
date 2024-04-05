@@ -11,10 +11,11 @@ Cell::Cell(int a, int b){
   acc_right = true; 
   acc_left = true;
 }
-Cell::Cell(int a, int b, int x){
+Cell::Cell(int a, int b, int value){
   y = a;
   x = b;
-  val = x;
+  val = value;
+
   acc_top = true;
   acc_down = true;
   acc_right = true; 
@@ -65,31 +66,73 @@ bool Queue::is_empty(){
     return false;
 }
 
-void flood_fill(Cell maze[4][6], Queue q, int size_y, int size_x) {
-    while(!q.is_empty()){
-        Cell c = q.pop_front();
+void flood_fill(Cell t_maze[4][6], Queue t_q, int size_y, int size_x) {
+    while(!t_q.is_empty()){
+        Cell c = t_q.pop_front();
         int val = c.val;
         //down
-        if(c.get_y()+1 < size_y && maze[c.get_y() + 1][c.get_x()].val == -1 && maze[c.get_y() + 1][c.get_x()].acc_top){
-            maze[c.get_y() + 1][c.get_x()].val = val + 1;
-            q.push(maze[c.get_y() + 1][c.get_x()]);
+        if(c.get_y()+1 < size_y && t_maze[c.get_y() + 1][c.get_x()].val == -1 && t_maze[c.get_y() + 1][c.get_x()].acc_top){
+            t_maze[c.get_y() + 1][c.get_x()].val = val + 1;
+            t_q.push(t_maze[c.get_y() + 1][c.get_x()]);
         }
         //up
-        if(c.get_y()-1 >= 0 && maze[c.get_y() - 1][c.get_x()].val == -1 && maze[c.get_y() - 1][c.get_x()].acc_down){
-            maze[c.get_y() - 1][c.get_x()].val = val + 1;
-            q.push(maze[c.get_y() - 1][c.get_x()]);
+        if(c.get_y()-1 >= 0 && t_maze[c.get_y() - 1][c.get_x()].val == -1 && t_maze[c.get_y() - 1][c.get_x()].acc_down){
+            t_maze[c.get_y() - 1][c.get_x()].val = val + 1;
+            t_q.push(t_maze[c.get_y() - 1][c.get_x()]);
         }
         //right
-        if(c.get_x()+1 < size_x && maze[c.get_y()][c.get_x() + 1].val == -1 && maze[c.get_y()][c.get_x() + 1].acc_left){
-            maze[c.get_y()][c.get_x() + 1].val = val + 1;
-            q.push(maze[c.get_y()][c.get_x() + 1]);
+        if(c.get_x()+1 < size_x && t_maze[c.get_y()][c.get_x() + 1].val == -1 && t_maze[c.get_y()][c.get_x() + 1].acc_left){
+            t_maze[c.get_y()][c.get_x() + 1].val = val + 1;
+            t_q.push(t_maze[c.get_y()][c.get_x() + 1]);
         }
         //left
-        if(c.get_x()-1 >= 0 && maze[c.get_y()][c.get_x() - 1].val == -1 && maze[c.get_y()][c.get_x() - 1].acc_right) {
-            maze[c.get_y()][c.get_x() - 1].val = val + 1;
-            q.push(maze[c.get_y()][c.get_x() - 1]);
+        if(c.get_x()-1 >= 0 && t_maze[c.get_y()][c.get_x() - 1].val == -1 && t_maze[c.get_y()][c.get_x() - 1].acc_right) {
+            t_maze[c.get_y()][c.get_x() - 1].val = val + 1;
+            t_q.push(t_maze[c.get_y()][c.get_x() - 1]);
         }
 
     }
 }
+
+void set_wall(Cell maze[4][6], Cell c1, int direction, int size_y, int size_x){
+    switch(direction) {
+        case 0:
+            if (c1.get_y() + 1 < size_y) {
+                maze[c1.get_y() + 1][c1.get_x()].acc_top = false;
+                maze[c1.get_y()][c1.get_x()].acc_down = false;
+            }
+            break;
+        case 1:
+            if (c1.get_y() - 1 >= 0) {
+                maze[c1.get_y() - 1][c1.get_x()].acc_down = false;
+                maze[c1.get_y()][c1.get_x()].acc_top = false;
+            }
+            break;
+        case 2:
+            if (c1.get_x() + 1 < size_x) {
+                maze[c1.get_y()][c1.get_x() + 1].acc_left = false;
+                maze[c1.get_y()][c1.get_x()].acc_right = false;
+            }
+            break;
+        case 3:
+            if (c1.get_x() - 1 >= 0) {
+                maze[c1.get_y()][c1.get_x() - 1].acc_right = false;
+                maze[c1.get_y()][c1.get_x()].acc_left = false;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void reset_maze(Cell maze[4][6], int size_y, int size_x, Cell goal){
+    for (int i = 0; i < size_y; i++){
+        for (int j = 0; j < size_x; j++) {
+            maze[i][j].val = -1;
+        }
+    }
+    maze[goal.get_y()][goal.get_x()].val = 0;
+}
+
+
 

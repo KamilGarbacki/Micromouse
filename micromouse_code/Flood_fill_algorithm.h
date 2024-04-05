@@ -16,7 +16,7 @@ public:
 
     Cell();
     Cell(int a, int b);
-    Cell(int a, int b, int x);
+    Cell(int a, int b, int value);
 
     int get_x()const;
     int get_y()const;
@@ -38,8 +38,10 @@ public:
     bool is_empty();
 };
 
-void flood_fill(Cell maze[4][6], Queue q, int size_y, int size_x);
+void flood_fill(Cell t_maze[4][6], Queue t_q, int size_y, int size_x);
 
-void travel(Cell maze[4][6], int size_y, int size_x, Cell curr, int mice_dir);
+void set_wall(Cell maze[4][6], Cell c1, int direction, int size_y, int size_x);
+
+void reset_maze(Cell maze[4][6], int size_y, int size_x, Cell goal);
 
 #endif
