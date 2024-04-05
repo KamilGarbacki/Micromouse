@@ -39,7 +39,8 @@ char speed_r = 245;
 
 char speed_offset = 4;
 
-  Queue q;
+  Queue<Cell> q;
+  Queue<int> best_path;
   Cell goal(2, 4, 0);
   Cell start(3,0);
   Cell maze[4][6];
@@ -281,14 +282,62 @@ void travel(Cell maze[4][6], int size_y, int size_x, Cell curr, int mice_dir){
     travel(maze, size_y, size_x, next_move, mice_dir);
 }
 
+void get_best_route(Cell maze[4][6], int size_y, int size_x, Cell curr, int mice_dir, Queue<int> opt_moves){
 
+    if(maze[curr.get_y()][curr.get_x()].val == 0){
+        //std::cout << "end" << std::endl;
+        return;
+    }
 
+    flood_fill(maze, q, size_y, size_x);
+    
+    Cell next_move;
+    next_move.val = 999;
+    int direction;
+
+    //down
+    if(curr.get_y()+1 < size_y && maze[curr.get_y() + 1][curr.get_x()].acc_top && maze[curr.get_y() + 1][curr.get_x()].val < next_move.val){
+        next_move = maze[curr.get_y() + 1][curr.get_x()];
+        direction = 2;
+    }
+    //up
+    if(curr.get_y()-1 >= 0 && maze[curr.get_y() - 1][curr.get_x()].acc_down && maze[curr.get_y() - 1][curr.get_x()].val < next_move.val){
+        next_move = maze[curr.get_y() - 1][curr.get_x()];
+        direction = 0;
+    }
+    //right
+    if(curr.get_x()+1 < size_x && maze[curr.get_y()][curr.get_x() + 1].acc_left && maze[curr.get_y()][curr.get_x() + 1].val < next_move.val){
+        next_move = maze[curr.get_y()][curr.get_x() + 1];
+        direction = 1;
+    }
+    //left
+    if(curr.get_x()-1 >= 0 && maze[curr.get_y()][curr.get_x() - 1].acc_right && maze[curr.get_y()][curr.get_x() - 1].val < next_move.val){
+        next_move = maze[curr.get_y()][curr.get_x() - 1];
+        direction = 3;
+    }
+
+  if(mice_dir != direction){
+  if(mice_dir-direction == 2 || mice_dir-direction == -2)
+    opt_moves.push(3);
+  else if((mice_dir == direction+1) ||(direction == mice_dir+3))
+    opt_moves.push(1);
+  else if((mice_dir+1 == direction) ||(direction=3 == mice_dir))
+    opt_moves.push(2);
+  }
+  opt_moves.push(0);
+  
+  mice_dir = direction;
+
+  get_best_route(maze, size_y, size_x, next_move, mice_dir, opt_moves);
+}
 
 void setup() {
   Serial.println();
   Serial.begin(9600);
+
   attachInterrupt(digitalPinToInterrupt(enc_l_pin), count_l, CHANGE);
   attachInterrupt(digitalPinToInterrupt(enc_r_pin), count_r, CHANGE);
+
   pinMode(5,OUTPUT);
   pinMode(6,OUTPUT);
   pinMode(7,OUTPUT);
@@ -300,13 +349,6 @@ void setup() {
     for (int j = 0; j < 6; j++) {
       maze[i][j] = Cell(i,j,-1);
     }
-  }
-
-  for (int i = 0; i < 4; i++) {
-    for (int j = 0; j < 6; j++) {
-      Serial.print(maze[i][j].val);
-    }
-    Serial.println();
   }
   Serial.println("---------------------");
 
@@ -323,6 +365,30 @@ void setup() {
   }
 
   travel(maze, 4, 6, start, 0);
+
+  delay(6000);
+
+  get_best_route(maze, 4, 6, start, 0, best_path);
+
+  while(!best_path.is_empty()){
+    int next_move = best_path.pop_front();
+
+    switch(next_move){
+      case 0:
+        move(move_dist);
+        break;
+      case 1:
+        turn_l();
+        break;
+      case 2:
+        turn_r();
+        break;
+      case 3:
+        turn_around();
+        break;
+    }
+
+  }
 }
 
 void loop() {

@@ -28,45 +28,8 @@ int Cell::get_y()const{
   return y;
 }
 
-void Queue::push(Cell i){
-  size++;
 
-  Node* x = new Node({ i, nullptr });
-
-  if (tail == nullptr) {
-    tail = x;
-    head = x;
-    }
-  else {
-      tail->next = x;
-      tail = x;
-  }
-}
-
-Cell Queue::pop_front(){
-  if (head != nullptr){
-    size--;
-
-    Node* temp = head;
-    head = head->next;
-
-    if(size == 0){
-      head = nullptr;
-      tail = nullptr;
-    }
-
-    return(temp->data);
-  }
-}
-
-bool Queue::is_empty(){
-  if (head == nullptr)
-    return true;
-  else
-    return false;
-}
-
-void flood_fill(Cell t_maze[4][6], Queue t_q, int size_y, int size_x) {
+void flood_fill(Cell t_maze[4][6], Queue<Cell> t_q, int size_y, int size_x) {
     while(!t_q.is_empty()){
         Cell c = t_q.pop_front();
         int val = c.val;
