@@ -110,6 +110,10 @@ void move(float dist){
 
   while(enc_l <= pulses || enc_r <= pulses){
     delay(20);
+    
+    Serial.print("end lewy: ");
+    Serial.println(enc_l);
+    Serial.println("------");
 
     M3_advance(100);
     M4_advance(100);
@@ -127,7 +131,7 @@ void move(float dist){
 }
 
 void turn_r(){
-  int pulses = (12 / (3.14f * 6.5f)) * 1920;
+  int pulses = (12 / (3.14f * 6.5f)) * 1900;
 
   int prev_l;
   int prev_r;
@@ -159,7 +163,7 @@ void turn_r(){
 }
 
 void turn_l(){
-  int pulses = (12 / (3.14f * 6.5f)) * 1920;
+  int pulses = (12 / (3.14f * 6.5f)) * 1900;
 
   int prev_l;
   int prev_r;
@@ -190,7 +194,7 @@ void turn_l(){
 }
 
 void turn_around(){
-  int pulses = 2*(12 / (3.14f * 6.5f)) * 1920;
+  int pulses = 2*(12 / (3.14f * 6.5f)) * 1900;
 
   int prev_l;
   int prev_r;
@@ -345,53 +349,55 @@ void setup() {
 
   
 
-  for (int i = 0; i < 4; i++) {
-    for (int j = 0; j < 6; j++) {
-      maze[i][j] = Cell(i,j,-1);
-    }
-  }
-  Serial.println("---------------------");
+//   for (int i = 0; i < 4; i++) {
+//     for (int j = 0; j < 6; j++) {
+//       maze[i][j] = Cell(i,j,-1);
+//     }
+//   }
+//   Serial.println("---------------------");
 
- maze[goal.get_y()][goal.get_x()].val = 0;
+//  maze[goal.get_y()][goal.get_x()].val = 0;
 
-  q.push(goal);
-  flood_fill(maze, q, 4, 6);
+//   q.push(goal);
+//   flood_fill(maze, q, 4, 6);
   
-  for (int i = 0; i < 4; i++) {
-    for (int j = 0; j < 6; j++) {
-      Serial.print(maze[i][j].val);
-    }
-    Serial.println();
-  }
+//   for (int i = 0; i < 4; i++) {
+//     for (int j = 0; j < 6; j++) {
+//       Serial.print(maze[i][j].val);
+//     }
+//     Serial.println();
+//   }
 
-  travel(maze, 4, 6, start, 0);
+//   travel(maze, 4, 6, start, 0);
 
-  delay(6000);
+//   delay(6000);
 
-  get_best_route(maze, 4, 6, start, 0, best_path);
+//   get_best_route(maze, 4, 6, start, 0, best_path);
 
-  while(!best_path.is_empty()){
-    int next_move = best_path.pop_front();
+//   while(!best_path.is_empty()){
+//     int next_move = best_path.pop_front();
 
-    switch(next_move){
-      case 0:
-        move(move_dist);
-        break;
-      case 1:
-        turn_l();
-        break;
-      case 2:
-        turn_r();
-        break;
-      case 3:
-        turn_around();
-        break;
-    }
+//     switch(next_move){
+//       case 0:
+//         move(move_dist);
+//         break;
+//       case 1:
+//         turn_l();
+//         break;
+//       case 2:
+//         turn_r();
+//         break;
+//       case 3:
+//         turn_around();
+//         break;
+//     }
 
-  }
+//   }
+  
 }
 
 void loop() {
- 
+  move(25);
+  delay(1500);
 }
 
