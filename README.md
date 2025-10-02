@@ -10,6 +10,7 @@ Once the optimal route has been found, the mouse will traverse that route in the
 
 ## Project Developed with:
 - PlatformIO
+- C++ 17
 - Arduino UNO
 - Ultrasonic Sensors US-015
 - Micro DC Motors with Encoder-SJ02 SKU FIT0458
