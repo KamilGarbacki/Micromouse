@@ -22,8 +22,9 @@ class Engine {
         rightMotor(nullptr) {}
 
   void addMotor(Motor* motor);
-  void driveToNextCell();
+  void driveForward();
   void turn(bool clockwise, int degrees);
+  static void stopMotors();
 };
 
 }  // namespace micromouse

@@ -4,10 +4,6 @@
 #include <Arduino.h>
 // main.cpp
 
-auto newEngine = micromouse::Engine();
-
-
-
 void setup() {
   Serial.begin(9600);
   Serial.println();

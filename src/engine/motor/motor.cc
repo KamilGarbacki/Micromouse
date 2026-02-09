@@ -14,10 +14,7 @@ void Motor::setupMotor() const {
 }
 
 void Motor::handleEncoder() {
-  if (digitalRead(directionPin) == HIGH)
-    encoderPings++;
-  else
-    encoderPings--;
+  pings++;
 }
 
 void Motor::setSpeed(const int speed) const {

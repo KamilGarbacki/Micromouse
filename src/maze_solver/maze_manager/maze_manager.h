@@ -6,7 +6,6 @@
 #define MAZE_MANAGER_H
 #include <stdint.h>
 #include <Arduino.h>
-#include "Map.h"
 #include "maze_solver/cell/cell.h"
 #include "direction/Direction.h"
 #include "maze_solver/queue/Queue.h"

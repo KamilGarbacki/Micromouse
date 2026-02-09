@@ -18,7 +18,7 @@ namespace micromouse {
 
 class MazeSolver {
   MazeManager maze;
-  Cell currentCell;
+  Cell currentCell; 
   Direction mouseDir;
   Engine engine;
   List<UltrasonicDistSensor*> sensors;

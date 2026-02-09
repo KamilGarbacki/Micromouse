@@ -6,11 +6,9 @@
 #include <Arduino.h>
 
 namespace micromouse {
-#define ENCODER_TICKS_PER_CELL 2068  // Example value, calibrate to your robot
-#define ENCODER_TICKS_PER_TURN 1107   // Example value, calibrate to your robot
+#define ENCODER_TICKS_PER_TURN 1107
 #define FORWARD_SPEED 40            // Base speed for straight movement (0-255)
 #define TURN_SPEED 30                // Base speed for turning
-#define BACKOOF_SPEED 10
 
 static Motor* leftMotorInstance = nullptr;
 static Motor* rightMotorInstance = nullptr;
@@ -23,8 +21,13 @@ void handleRightEncoder() {
   if (rightMotorInstance) rightMotorInstance->handleEncoder();
 }
 
+void handleEncoder() {
+
+}
+
 void Engine::addMotor(Motor* motor) {
   motor->setupMotor();
+  motor->onValueChange(stopMotors);
 
   if (motor->getType() == MotorMountSide::LEFT) {
     leftMotor = motor;
@@ -41,72 +44,61 @@ void Engine::addMotor(Motor* motor) {
   }
 }
 
-int getNewSpeed(int baseSpeed, int ticks, int goal) {
+int getNewSpeed(const int baseSpeed, const int ticks, const int goal) {
   return baseSpeed - ticks * (40 / goal);
 }
 
-void Engine::driveToNextCell() {
-  leftMotor->resetEncoderPings();
-  rightMotor->resetEncoderPings();
-
-  straightPid.reset();
-
-  while (true) {
-    const int encoderL = abs(leftMotor->getEncoderPings());
-    const int encoderR = abs(rightMotor->getEncoderPings());
-
-    // Serial.println("----------------------------------");
-    // Serial.print("Left Encoder: ");
-    // Serial.println(encoderL);
-    // Serial.print("Right Encoder: ");
-    // Serial.println(encoderR);
-
-    if (encoderL >= ENCODER_TICKS_PER_CELL) leftMotor->shortBreak();
-    if (encoderR >= ENCODER_TICKS_PER_CELL) rightMotor->shortBreak();
-
-    if (encoderL >= ENCODER_TICKS_PER_CELL || encoderR >= ENCODER_TICKS_PER_CELL) {
-      leftMotor->shortBreak();
-      rightMotor->shortBreak();
-      break;
-    }
-
-    int baseSpeedL = FORWARD_SPEED;
-    int baseSpeedR = FORWARD_SPEED;
-
-    // if (encoderL >= 0.95 * ENCODER_TICKS_PER_CELL || encoderR >= 0.95 * ENCODER_TICKS_PER_CELL) {
-    //   baseSpeedL = FORWARD_SPEED / 4;
-    //   baseSpeedR = FORWARD_SPEED / 4;
-    // } else if (encoderL >= 0.8 * ENCODER_TICKS_PER_CELL || encoderR >= 0.8 * ENCODER_TICKS_PER_CELL) {
-    //   baseSpeedL = FORWARD_SPEED / 2;
-    //   baseSpeedR = FORWARD_SPEED / 2;
-    // } else {
-    //   baseSpeedL = FORWARD_SPEED;
-    //   baseSpeedR = FORWARD_SPEED;
-    // }
-
-    baseSpeedL = getNewSpeed(baseSpeedL, encoderL, ENCODER_TICKS_PER_CELL);
-    baseSpeedR = getNewSpeed(baseSpeedR, encoderR, ENCODER_TICKS_PER_CELL);
-
-    const int straightError = encoderL - encoderR;
-    const float straightCorrection = straightPid.getCorrection(straightError);
-
-    if (straightError < 0) {
-      baseSpeedL += abs(straightError) * straightCorrection;
-    } else if (straightError > 0) {
-      baseSpeedL -= abs(straightError) * straightCorrection;
-    }
-
-    leftMotor->setSpeed(baseSpeedL);
-    rightMotor->setSpeed(baseSpeedR);
-  }
-
-  leftMotor->setSpeed(0);
-  rightMotor->setSpeed(0);
+void Engine::driveForward() {
+  // leftMotor->resetPings();
+  // rightMotor->resetPings();
+  //
+  // straightPid.reset();
+  //
+  // while (true) {
+  //   const int encoderL = abs(leftMotor->getEncoderPings());
+  //   const int encoderR = abs(rightMotor->getEncoderPings());
+  //
+  //   // Serial.println("----------------------------------");
+  //   // Serial.print("Left Encoder: ");
+  //   // Serial.println(encoderL);
+  //   // Serial.print("Right Encoder: ");
+  //   // Serial.println(encoderR);
+  //
+  //   if (encoderL >= ENCODER_TICKS_PER_CELL) leftMotor->shortBreak();
+  //   if (encoderR >= ENCODER_TICKS_PER_CELL) rightMotor->shortBreak();
+  //
+  //   if (encoderL >= ENCODER_TICKS_PER_CELL || encoderR >= ENCODER_TICKS_PER_CELL) {
+  //     leftMotor->shortBreak();
+  //     rightMotor->shortBreak();
+  //     break;
+  //   }
+  //
+  //   int baseSpeedL = FORWARD_SPEED;
+  //   int baseSpeedR = FORWARD_SPEED;
+  //
+  //   baseSpeedL = getNewSpeed(baseSpeedL, encoderL, ENCODER_TICKS_PER_CELL);
+  //   baseSpeedR = getNewSpeed(baseSpeedR, encoderR, ENCODER_TICKS_PER_CELL);
+  //
+  //   const int straightError = encoderL - encoderR;
+  //   const float straightCorrection = straightPid.getCorrection(straightError);
+  //
+  //   if (straightError < 0) {
+  //     baseSpeedL += abs(straightError) * straightCorrection;
+  //   } else if (straightError > 0) {
+  //     baseSpeedL -= abs(straightError) * straightCorrection;
+  //   }
+  //
+  //   leftMotor->setSpeed(baseSpeedL);
+  //   rightMotor->setSpeed(baseSpeedR);
+  // }
+  //
+  // leftMotor->setSpeed(0);
+  // rightMotor->setSpeed(0);
 }
 
 void Engine::turn(const bool clockwise, int degrees) {
-  leftMotor->resetEncoderPings();
-  rightMotor->resetEncoderPings();
+  leftMotor->resetPings();
+  rightMotor->resetPings();
 
   straightPid.reset();
   lengthPid.reset();

@@ -84,7 +84,7 @@ void MazeSolver::solve() {
     default:;
   }
 
-  engine.driveToNextCell();
+  engine.driveForward();
 
 
   delay(150);
