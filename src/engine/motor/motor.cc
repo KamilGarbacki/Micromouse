@@ -50,4 +50,13 @@ void Motor::shortBreak() const {
   this->setSpeed(0);
 }
 
+long Motor::getEncoderPings() const {
+  long result = 0;
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    result = pings;
+  }
+
+  return result;
+}
+
 }  // namespace micromouse

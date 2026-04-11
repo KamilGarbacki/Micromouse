@@ -5,7 +5,7 @@
 #ifndef MOTOR_H
 #define MOTOR_H
 #include <stdint.h>
-
+#include <util/atomic.h>
 #include "motor_dir.h"
 
 using FuncPtr = void(*)();
@@ -16,7 +16,7 @@ class Motor {
   const uint8_t speedPin;
   const uint8_t directionPin;
   const uint8_t encoderPin;
-  long pings;
+  volatile long pings;
   const MotorMountSide type;
   FuncPtr stopMotorsFunction;
 
@@ -40,8 +40,8 @@ class Motor {
   void setupMotor() const;
 
   [[nodiscard]] uint8_t getEncoderPin() const { return encoderPin; }
-  [[nodiscard]] long getEncoderPings() const { return pings; }
   [[nodiscard]] MotorMountSide getType() const { return type; }
+  [[nodiscard]] long getEncoderPings() const;
 
   void setSpeed(int speed) const;
   void onValueChange(const FuncPtr onValueChange) {stopMotorsFunction = onValueChange; }

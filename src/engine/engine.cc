@@ -6,7 +6,8 @@
 #include <Arduino.h>
 
 namespace micromouse {
-#define ENCODER_TICKS_PER_TURN 1107
+#define ENCODER_TICKS_PER_CELL 2068
+#define ENCODER_TICKS_PER_TURN 554
 #define FORWARD_SPEED 40            // Base speed for straight movement (0-255)
 #define TURN_SPEED 30                // Base speed for turning
 
@@ -34,13 +35,13 @@ void Engine::addMotor(Motor* motor) {
     leftMotorInstance = leftMotor;
 
     attachInterrupt(digitalPinToInterrupt(motor->getEncoderPin()),
-                    handleLeftEncoder, CHANGE);
+                    handleLeftEncoder, RISING);
   } else if (motor->getType() == MotorMountSide::RIGHT) {
     rightMotor = motor;
     rightMotorInstance = rightMotor;
 
     attachInterrupt(digitalPinToInterrupt(motor->getEncoderPin()),
-                    handleRightEncoder, CHANGE);
+                    handleRightEncoder, RISING);
   }
 }
 
@@ -49,51 +50,45 @@ int getNewSpeed(const int baseSpeed, const int ticks, const int goal) {
 }
 
 void Engine::driveForward() {
-  // leftMotor->resetPings();
-  // rightMotor->resetPings();
-  //
-  // straightPid.reset();
-  //
-  // while (true) {
-  //   const int encoderL = abs(leftMotor->getEncoderPings());
-  //   const int encoderR = abs(rightMotor->getEncoderPings());
-  //
-  //   // Serial.println("----------------------------------");
-  //   // Serial.print("Left Encoder: ");
-  //   // Serial.println(encoderL);
-  //   // Serial.print("Right Encoder: ");
-  //   // Serial.println(encoderR);
-  //
-  //   if (encoderL >= ENCODER_TICKS_PER_CELL) leftMotor->shortBreak();
-  //   if (encoderR >= ENCODER_TICKS_PER_CELL) rightMotor->shortBreak();
-  //
-  //   if (encoderL >= ENCODER_TICKS_PER_CELL || encoderR >= ENCODER_TICKS_PER_CELL) {
-  //     leftMotor->shortBreak();
-  //     rightMotor->shortBreak();
-  //     break;
-  //   }
-  //
-  //   int baseSpeedL = FORWARD_SPEED;
-  //   int baseSpeedR = FORWARD_SPEED;
-  //
-  //   baseSpeedL = getNewSpeed(baseSpeedL, encoderL, ENCODER_TICKS_PER_CELL);
-  //   baseSpeedR = getNewSpeed(baseSpeedR, encoderR, ENCODER_TICKS_PER_CELL);
-  //
-  //   const int straightError = encoderL - encoderR;
-  //   const float straightCorrection = straightPid.getCorrection(straightError);
-  //
-  //   if (straightError < 0) {
-  //     baseSpeedL += abs(straightError) * straightCorrection;
-  //   } else if (straightError > 0) {
-  //     baseSpeedL -= abs(straightError) * straightCorrection;
-  //   }
-  //
-  //   leftMotor->setSpeed(baseSpeedL);
-  //   rightMotor->setSpeed(baseSpeedR);
-  // }
-  //
-  // leftMotor->setSpeed(0);
-  // rightMotor->setSpeed(0);
+  leftMotor->resetPings();
+  rightMotor->resetPings();
+
+  straightPid.reset();
+
+  while (true) {
+    const long encoderL = abs(leftMotor->getEncoderPings());
+    const long encoderR = abs(rightMotor->getEncoderPings());
+
+    if (encoderL >= ENCODER_TICKS_PER_CELL) leftMotor->shortBreak();
+    if (encoderR >= ENCODER_TICKS_PER_CELL) rightMotor->shortBreak();
+
+    if (encoderL >= ENCODER_TICKS_PER_CELL || encoderR >= ENCODER_TICKS_PER_CELL) {
+      leftMotor->shortBreak();
+      rightMotor->shortBreak();
+      break;
+    }
+
+    int baseSpeedL = FORWARD_SPEED;
+    int baseSpeedR = FORWARD_SPEED;
+
+    baseSpeedL = getNewSpeed(baseSpeedL, encoderL, ENCODER_TICKS_PER_CELL);
+    baseSpeedR = getNewSpeed(baseSpeedR, encoderR, ENCODER_TICKS_PER_CELL);
+
+    const int straightError = encoderL - encoderR;
+    const float straightCorrection = straightPid.getCorrection(straightError);
+
+    if (straightError < 0) {
+      baseSpeedL += abs(straightError) * straightCorrection;
+    } else if (straightError > 0) {
+      baseSpeedL -= abs(straightError) * straightCorrection;
+    }
+
+    leftMotor->setSpeed(baseSpeedL);
+    rightMotor->setSpeed(baseSpeedR);
+  }
+
+  leftMotor->setSpeed(0);
+  rightMotor->setSpeed(0);
 }
 
 void Engine::turn(const bool clockwise, int degrees) {
@@ -109,8 +104,8 @@ void Engine::turn(const bool clockwise, int degrees) {
   const int turns = degrees / 90;
 
   while (true) {
-    const int encoderL = abs(leftMotor->getEncoderPings());
-    const int encoderR = abs(rightMotor->getEncoderPings());
+    long encoderL = abs(leftMotor->getEncoderPings());
+    long encoderR = abs(rightMotor->getEncoderPings());
 
     if (encoderL >= turns * ENCODER_TICKS_PER_TURN || encoderR >= turns * ENCODER_TICKS_PER_TURN) {
       leftMotor->shortBreak();
@@ -120,19 +115,6 @@ void Engine::turn(const bool clockwise, int degrees) {
 
     int baseSpeedL = TURN_SPEED;
     int baseSpeedR = TURN_SPEED;
-
-    // if (encoderL >= 0.95 * ENCODER_TICKS_PER_CELL ||
-    //     encoderR >= 0.95 * ENCODER_TICKS_PER_CELL) {
-    //   baseSpeedL = FORWARD_SPEED / 4;
-    //   baseSpeedR = FORWARD_SPEED / 4;
-    // } else if (encoderL >= 0.8 * ENCODER_TICKS_PER_CELL ||
-    //     encoderR >= 0.8 * ENCODER_TICKS_PER_CELL) {
-    //   baseSpeedL = FORWARD_SPEED / 2;
-    //   baseSpeedR = FORWARD_SPEED / 2;
-    // } else {
-    //   baseSpeedL = FORWARD_SPEED;
-    //   baseSpeedR = FORWARD_SPEED;
-    // }
 
     baseSpeedL = getNewSpeed(baseSpeedL, encoderL, ENCODER_TICKS_PER_TURN);
     baseSpeedR = getNewSpeed(baseSpeedR, encoderR, ENCODER_TICKS_PER_TURN);
