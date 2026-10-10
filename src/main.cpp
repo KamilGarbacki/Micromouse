@@ -1,37 +1,14 @@
-#include "direction/Direction.h"
-#include "engine/engine.h"
-#include "maze_solver/maze_solver.h"
+// Entry points called by the Arduino core. All logic lives in app/.
+// Arduino.h is needed only for the extern "C" setup()/loop() declarations.
 #include <Arduino.h>
-// main.cpp
 
-void setup() {
-  Serial.begin(9600);
-  Serial.println();
+#include "app/robot_app.h"
 
-  auto newEngine = micromouse::Engine();
+namespace {
+micromouse::RobotApp gApp;
+}  // namespace
+//claude --resume bd9720a8-90f5-4dd2-a39a-13956a205ea5
 
-  auto motorLeft = micromouse::Motor(5, 8, 2, micromouse::MotorMountSide::LEFT);
-  auto motorRight = micromouse::Motor(11, 12, 3, micromouse::MotorMountSide::RIGHT);
+void setup() { gApp.begin(); }
 
-  newEngine.addMotor(&motorLeft);
-  newEngine.addMotor(&motorRight);
-
-  auto mazeSolver = micromouse::MazeSolver(micromouse::Cell(4, 0, 0), micromouse::Direction::Up, 5, 4);
-
-  mazeSolver.addSensor(6, 4, micromouse::Direction::Left);
-  mazeSolver.addSensor(9, 7, micromouse::Direction::Up);
-  mazeSolver.addSensor(13, 10, micromouse::Direction::Right);
-
-  mazeSolver.setEngine(newEngine);
-  mazeSolver.setGoal(0,3 );
-
-  List<String> stepsTaken;
-  mazeSolver.solve();
-  Serial.println("Solved");
-}
-
-void loop() {
-
-}
-// main.cpp
-
+void loop() { gApp.step(); }
