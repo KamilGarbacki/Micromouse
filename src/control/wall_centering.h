@@ -30,7 +30,8 @@ struct CenteringParams {
 /// positive correction.
 class WallCentering {
  public:
-  explicit WallCentering(const CenteringParams& params) : params_(params) {}
+  explicit constexpr WallCentering(const CenteringParams& params)
+      : params_(params) {}
 
   /// Sets which sides may be used. Readings of a side that changes are
   /// discarded. Does not reset the left/right alternation.

@@ -1,6 +1,8 @@
-// Host tests: wheel mixer, wall centering, median and ring buffer.
+// Host tests: wheel mixer, wall centering, encoder health, median and ring
+// buffer.
 #include <unity.h>
 
+#include "control/encoder_health.h"
 #include "control/heading_carry.h"
 #include "control/stiction.h"
 #include "control/wall_centering.h"
@@ -20,10 +22,49 @@ constexpr CenteringParams kCentering = {6.0f, 6.0f, 8.0f, 40.0f,
 void setUp() {}
 void tearDown() {}
 
+// --- Encoder health ----------------------------------------------------------
+
+// 94 ticks = 20 mm at 960 ticks per revolution, ratio 0.3 (the config).
+constexpr int32_t kMinTravel = 94;
+constexpr float kRatio = 0.3f;
+
+void test_encoder_health_healthy_pair_and_start_skew() {
+  TEST_ASSERT_FALSE(encoderPairFaulty(0, 0, kMinTravel, kRatio));
+  TEST_ASSERT_FALSE(encoderPairFaulty(1034, 1030, kMinTravel, kRatio));
+  TEST_ASSERT_FALSE(encoderPairFaulty(554, 560, kMinTravel, kRatio));
+  // One wheel breaks away first: no fault before the travel threshold,
+  // however lopsided.
+  TEST_ASSERT_FALSE(encoderPairFaulty(kMinTravel, 0, kMinTravel, kRatio));
+  TEST_ASSERT_FALSE(encoderPairFaulty(0, 60, kMinTravel, kRatio));
+  // A realistic lag of ~10 ticks past the threshold.
+  TEST_ASSERT_FALSE(encoderPairFaulty(100, 88, kMinTravel, kRatio));
+}
+
+void test_encoder_health_detects_a_silent_wheel() {
+  // Dead / unplugged encoder: one count stays 0 (either side).
+  TEST_ASSERT_TRUE(encoderPairFaulty(95, 0, kMinTravel, kRatio));
+  TEST_ASSERT_TRUE(encoderPairFaulty(0, 95, kMinTravel, kRatio));
+  // A few noise ticks do not hide it.
+  TEST_ASSERT_TRUE(encoderPairFaulty(400, 5, kMinTravel, kRatio));
+  TEST_ASSERT_TRUE(encoderPairFaulty(7, 1034, kMinTravel, kRatio));
+}
+
+void test_encoder_health_threshold_edges() {
+  // Armed strictly above minTravel.
+  TEST_ASSERT_FALSE(encoderPairFaulty(kMinTravel, 1, kMinTravel, kRatio));
+  TEST_ASSERT_TRUE(encoderPairFaulty(kMinTravel + 1, 1, kMinTravel, kRatio));
+  // Ratio boundary (0.3f is not exact: test either side of 30 %).
+  TEST_ASSERT_FALSE(encoderPairFaulty(100, 31, kMinTravel, kRatio));
+  TEST_ASSERT_TRUE(encoderPairFaulty(100, 29, kMinTravel, kRatio));
+  TEST_ASSERT_FALSE(encoderPairFaulty(31, 100, kMinTravel, kRatio));
+  TEST_ASSERT_TRUE(encoderPairFaulty(29, 100, kMinTravel, kRatio));
+}
+
 // --- Wheel mixer -----------------------------------------------------------
 
-void test_mixer_applies_trim_and_correction() {
-  const WheelMix m = mixWheels(100.0f, 10.0f, 0.9f, 1.0f, 20.0f, 255.0f);
+void test_mixer_applies_per_wheel_base_and_correction() {
+  // Per-wheel bases (each wheel's own feed-forward) replace the old trims.
+  const WheelMix m = mixWheels(90.0f, 100.0f, 10.0f, 20.0f, 20.0f, 255.0f);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 80.0f, m.left);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 110.0f, m.right);
   TEST_ASSERT_FALSE(m.speedClamp.high || m.speedClamp.low);
@@ -32,7 +73,7 @@ void test_mixer_applies_trim_and_correction() {
 
 void test_mixer_floor_keeps_differential() {
   // left = 30 - 25 = 5 < 20: raised to 20, the 15 moves to the right wheel.
-  const WheelMix m = mixWheels(30.0f, 25.0f, 1.0f, 1.0f, 20.0f, 255.0f);
+  const WheelMix m = mixWheels(30.0f, 30.0f, 25.0f, 20.0f, 20.0f, 255.0f);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 20.0f, m.left);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 70.0f, m.right);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 50.0f, m.right - m.left);
@@ -40,13 +81,13 @@ void test_mixer_floor_keeps_differential() {
 
 void test_mixer_overflow_keeps_differential() {
   // right = 270 > 255: both lowered by 15, differential 40 kept.
-  const WheelMix r = mixWheels(250.0f, 20.0f, 1.0f, 1.0f, 20.0f, 255.0f);
+  const WheelMix r = mixWheels(250.0f, 250.0f, 20.0f, 20.0f, 20.0f, 255.0f);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 255.0f, r.right);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 215.0f, r.left);
   TEST_ASSERT_TRUE(r.speedClamp.high);
   TEST_ASSERT_FALSE(r.headingClamp.high || r.headingClamp.low);
 
-  const WheelMix l = mixWheels(250.0f, -20.0f, 1.0f, 1.0f, 20.0f, 255.0f);
+  const WheelMix l = mixWheels(250.0f, 250.0f, -20.0f, 20.0f, 20.0f, 255.0f);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 255.0f, l.left);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 215.0f, l.right);
   TEST_ASSERT_TRUE(l.speedClamp.high);
@@ -55,17 +96,28 @@ void test_mixer_overflow_keeps_differential() {
 
 void test_mixer_reports_heading_saturation_when_differential_too_big() {
   // Differential 400 > 255 - 20: lower wheel held at the floor.
-  const WheelMix r = mixWheels(250.0f, 200.0f, 1.0f, 1.0f, 20.0f, 255.0f);
+  const WheelMix r = mixWheels(250.0f, 250.0f, 200.0f, 20.0f, 20.0f, 255.0f);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 255.0f, r.right);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 20.0f, r.left);
   TEST_ASSERT_TRUE(r.headingClamp.high);
   TEST_ASSERT_FALSE(r.headingClamp.low);
 
-  const WheelMix l = mixWheels(250.0f, -200.0f, 1.0f, 1.0f, 20.0f, 255.0f);
+  const WheelMix l = mixWheels(250.0f, 250.0f, -200.0f, 20.0f, 20.0f, 255.0f);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 255.0f, l.left);
   TEST_ASSERT_FLOAT_WITHIN(kEps, 20.0f, l.right);
   TEST_ASSERT_TRUE(l.headingClamp.low);
   TEST_ASSERT_FALSE(l.headingClamp.high);
+}
+
+void test_mixer_uses_each_wheels_own_floor() {
+  // left = 30 - 15 = 15 < its floor 25: raised to 25, the 10 moves right.
+  const WheelMix m = mixWheels(30.0f, 30.0f, 15.0f, 25.0f, 18.0f, 255.0f);
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 25.0f, m.left);
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 55.0f, m.right);
+  // Right floor applies to the right wheel only.
+  const WheelMix n = mixWheels(30.0f, 30.0f, -15.0f, 10.0f, 22.0f, 255.0f);
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 22.0f, n.right);
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 52.0f, n.left);
 }
 
 // --- Wall centering --------------------------------------------------------
@@ -192,6 +244,17 @@ void test_heading_carry_after_settle_timeout_uses_counts() {
                                                      554, 60));
 }
 
+void test_heading_carry_reverse_adjust_uses_commanded_sign() {
+  // Forward: L > R turns clockwise (+). Reverse: the same count difference
+  // turns the robot counter-clockwise (-).
+  TEST_ASSERT_EQUAL_INT32(14, heading::carryAfterStraight(10, 1, 54, 50, 60));
+  TEST_ASSERT_EQUAL_INT32(6, heading::carryAfterStraight(10, -1, 54, 50, 60));
+  TEST_ASSERT_EQUAL_INT32(-60,
+                          heading::carryAfterStraight(-58, -1, 10, 0, 60));
+  // Equal ticks (the alignment holds L = R): carry unchanged either way.
+  TEST_ASSERT_EQUAL_INT32(10, heading::carryAfterStraight(10, -1, 40, 40, 60));
+}
+
 void test_stiction_hysteresis() {
   bool rolling = false;
   rolling = updateRolling(rolling, 0.5f, 1.0f, 0.25f);  // one backlash tick
@@ -242,10 +305,11 @@ void test_ring_buffer_fifo_wraps_and_rejects_overflow() {
 
 int main() {
   UNITY_BEGIN();
-  RUN_TEST(test_mixer_applies_trim_and_correction);
+  RUN_TEST(test_mixer_applies_per_wheel_base_and_correction);
   RUN_TEST(test_mixer_floor_keeps_differential);
   RUN_TEST(test_mixer_overflow_keeps_differential);
   RUN_TEST(test_mixer_reports_heading_saturation_when_differential_too_big);
+  RUN_TEST(test_mixer_uses_each_wheels_own_floor);
   RUN_TEST(test_centering_alternates_and_skips_sides_without_wall);
   RUN_TEST(test_centering_ping_spacing);
   RUN_TEST(test_centering_low_pass_and_sub_cm_resolution);
@@ -253,11 +317,15 @@ int main() {
   RUN_TEST(test_heading_turn_target_absorbs_carry);
   RUN_TEST(test_heading_carry_after_turn);
   RUN_TEST(test_heading_carry_after_settle_timeout_uses_counts);
+  RUN_TEST(test_heading_carry_reverse_adjust_uses_commanded_sign);
   RUN_TEST(test_stiction_hysteresis);
   RUN_TEST(test_centering_sign_convention);
   RUN_TEST(test_centering_is_bounded);
   RUN_TEST(test_centering_rejects_implausible_readings);
   RUN_TEST(test_centering_ignores_sides_without_known_wall);
+  RUN_TEST(test_encoder_health_healthy_pair_and_start_skew);
+  RUN_TEST(test_encoder_health_detects_a_silent_wheel);
+  RUN_TEST(test_encoder_health_threshold_edges);
   RUN_TEST(test_median_odd_and_outlier);
   RUN_TEST(test_ring_buffer_fifo_wraps_and_rejects_overflow);
   return UNITY_END();

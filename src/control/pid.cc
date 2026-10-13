@@ -4,17 +4,6 @@
 
 namespace micromouse {
 
-Pid::Pid(const PidGains& gains, const float dt)
-    : kp_(gains.kp),
-      ki_(gains.ki),
-      kd_(gains.kd),
-      outputLimit_(gains.outputLimit),
-      dt_(dt > 0.0f ? dt : 0.0f),
-      invDt_(dt > 0.0f ? 1.0f / dt : 0.0f),
-      integralMax_(gains.ki != 0.0f
-                       ? gains.integralLimit / util::absValue(gains.ki)
-                       : 0.0f) {}
-
 float Pid::update(const float error, const PidClamp external) {
   if (dt_ <= 0.0f) return 0.0f;
 

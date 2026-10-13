@@ -17,6 +17,7 @@ enum class Status : uint8_t {
   kQueueOverflow = 7,    ///< internal: flood-fill queue full (a bug)
   kSensorFailure = 8,    ///< a sonar got no echo although a wall is known
   kExplorationLimit = 9, ///< more cells driven than the exploration budget
+  kEncoderFault = 10,    ///< move: one encoder silent while the other counts
 };
 
 constexpr bool isOk(const Status status) { return status == Status::kOk; }

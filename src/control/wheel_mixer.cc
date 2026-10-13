@@ -2,21 +2,21 @@
 
 namespace micromouse {
 
-WheelMix mixWheels(const float basePwm, const float correction,
-                   const float trimLeft, const float trimRight,
-                   const float floorPwm, const float maxPwm) {
-  float left = basePwm * trimLeft - correction;
-  float right = basePwm * trimRight + correction;
+WheelMix mixWheels(const float baseLeft, const float baseRight,
+                   const float correction, const float floorLeft,
+                   const float floorRight, const float maxPwm) {
+  float left = baseLeft - correction;
+  float right = baseRight + correction;
 
   // Keep both wheels turning: shift the correction onto the other wheel
-  // instead of stalling one below the floor (phase-1 behaviour).
-  if (left < floorPwm) {
-    right += floorPwm - left;
-    left = floorPwm;
+  // instead of stalling one below its floor (phase-1 behaviour).
+  if (left < floorLeft) {
+    right += floorLeft - left;
+    left = floorLeft;
   }
-  if (right < floorPwm) {
-    left += floorPwm - right;
-    right = floorPwm;
+  if (right < floorRight) {
+    left += floorRight - right;
+    right = floorRight;
   }
 
   WheelMix mix{left, right, {false, false}, {false, false}};
@@ -30,13 +30,13 @@ WheelMix mixWheels(const float basePwm, const float correction,
     mix.right -= overflow;
     mix.speedClamp.high = true;
     // The differential itself does not fit between floor and full scale:
-    // the lower wheel is held at the floor and the correction is limited.
-    if (mix.left < floorPwm) {
-      mix.left = floorPwm;
+    // the lower wheel is held at its floor and the correction is limited.
+    if (mix.left < floorLeft) {
+      mix.left = floorLeft;
       mix.headingClamp.high = true;  // right wheel at max: can't add more
     }
-    if (mix.right < floorPwm) {
-      mix.right = floorPwm;
+    if (mix.right < floorRight) {
+      mix.right = floorRight;
       mix.headingClamp.low = true;  // left wheel at max: can't subtract more
     }
   }

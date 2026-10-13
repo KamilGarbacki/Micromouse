@@ -7,7 +7,6 @@
 namespace {
 micromouse::RobotApp gApp;
 }  // namespace
-//claude --resume bd9720a8-90f5-4dd2-a39a-13956a205ea5
 
 void setup() { gApp.begin(); }
 

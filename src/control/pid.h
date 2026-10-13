@@ -31,7 +31,19 @@ struct PidClamp {
 class Pid {
  public:
   /// `dt` [s] must be > 0; otherwise update() always returns 0.
-  Pid(const PidGains& gains, float dt);
+  /// constexpr, so that the owning objects can be constant-initialised
+  /// (no start-up code).
+  constexpr Pid(const PidGains& gains, const float dt)
+      : kp_(gains.kp),
+        ki_(gains.ki),
+        kd_(gains.kd),
+        outputLimit_(gains.outputLimit),
+        dt_(dt > 0.0f ? dt : 0.0f),
+        invDt_(dt > 0.0f ? 1.0f / dt : 0.0f),
+        integralMax_(gains.ki != 0.0f
+                         ? gains.integralLimit /
+                               (gains.ki < 0.0f ? -gains.ki : gains.ki)
+                         : 0.0f) {}
 
   /// One control step. `external` is the downstream saturation observed
   /// after the previous update().

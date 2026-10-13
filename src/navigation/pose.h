@@ -69,6 +69,22 @@ constexpr uint8_t quarterTurns(const Relative rel) {
   return rel == Relative::kForward ? 0 : (rel == Relative::kBack ? 2 : 1);
 }
 
+/// Compass letter of an absolute direction (U/R/D/L), used by Serial logs
+/// and the run log.
+constexpr char directionLetter(const Direction dir) {
+  switch (dir) {
+    case Direction::kUp:
+      return 'U';
+    case Direction::kRight:
+      return 'R';
+    case Direction::kDown:
+      return 'D';
+    case Direction::kLeft:
+      return 'L';
+  }
+  return '?';
+}
+
 /// Row change of one step in `dir` (-1, 0 or +1).
 constexpr int8_t rowStep(const Direction dir) {
   return dir == Direction::kUp ? -1 : (dir == Direction::kDown ? 1 : 0);

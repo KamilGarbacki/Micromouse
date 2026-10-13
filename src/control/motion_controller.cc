@@ -1,13 +1,14 @@
 #include "control/motion_controller.h"
 
-#include <avr/pgmspace.h>
-
 #include "config/config.h"
+#include "control/encoder_health.h"
 #include "control/heading_carry.h"
+#include "control/learning.h"
 #include "control/stiction.h"
 #include "control/wheel_mixer.h"
 #include "hal/log.h"
 #include "hal/time.h"
+#include "util/flash.h"
 #include "util/math_utils.h"
 
 namespace micromouse {
@@ -17,46 +18,28 @@ namespace {
 namespace cfg = config;
 namespace log = hal::log;
 using config::LogLevel;
-
-constexpr PidGains kHeadingGains = {cfg::kHeadingKp, cfg::kHeadingKi,
-                                    cfg::kHeadingKd, cfg::kHeadingILimit,
-                                    cfg::kHeadingOutLimit};
-constexpr PidGains kSpeedGains = {cfg::kSpeedKp, cfg::kSpeedKi, 0.0f,
-                                  cfg::kSpeedILimit, cfg::kSpeedOutLimit};
+using util::loadFlash;
 
 // The parameter sets live in flash: on the AVR a constant aggregate would
-// otherwise be copied into RAM (.data) at start-up. load() copies one onto
-// the stack for the duration of a move.
-const MoveParams kForwardMove PROGMEM = {
+// otherwise be copied into RAM (.data) at start-up. loadFlash() copies one
+// onto the stack for the duration of a move.
+const MoveParams kForwardMove MM_FLASH = {
     {cfg::forward::kCruiseSpeed, cfg::forward::kCreepSpeed,
      cfg::forward::kAccel, cfg::forward::kDecel, cfg::forward::kCreepTicks,
      cfg::forward::kBrakeLeadTicks},
-    cfg::forward::kStaticPwm,
-    cfg::forward::kKineticPwm,
+    MoveKind::kForward,
 };
 
-const MoveParams kTurnMove PROGMEM = {
+const MoveParams kTurnMove MM_FLASH = {
     {cfg::turn::kCruiseSpeed, cfg::turn::kCreepSpeed, cfg::turn::kAccel,
      cfg::turn::kDecel, cfg::turn::kCreepTicks, cfg::turn::kBrakeLeadTicks},
-    cfg::turn::kStaticPwm,
-    cfg::turn::kKineticPwm,
+    MoveKind::kTurn,
 };
 
-const CenteringParams kCenteringParams PROGMEM = {
-    cfg::kCenteringNominalLeftCm, cfg::kCenteringNominalRightCm,
-    cfg::kCenteringGainTicksPerCm, cfg::kCenteringMaxTicks,
-    cfg::kCenteringMaxDeviationCm, cfg::kCenteringFilter,
-    cfg::kCenteringPingPeriods};
-
-template <typename T>
-T load(const T& flashObject) {
-  T copy;
-  memcpy_P(&copy, &flashObject, sizeof(T));
-  return copy;
-}
 
 constexpr float kMaxPwm = static_cast<float>(cfg::kMaxPwm);
 constexpr int8_t kForward = 1;
+constexpr int8_t kBackward = -1;
 constexpr uint8_t kMaxQuarterTurns = 2;
 
 /// Calibration diagnostics of one move (cruise-phase averages).
@@ -70,50 +53,31 @@ struct MoveStats {
 void logMove(const int32_t target, const int32_t left, const int32_t right,
              const Status status, const bool settled, const MoveStats& stats) {
   if (isOk(status)) {
-    log::print(F("move target="));
+    log::fmt(F("move"));
   } else {
-    log::print(F("move FAILED status="));
-    log::print(static_cast<unsigned int>(status));
-    log::print(F(" target="));
+    log::fmt(F("move FAILED status=%u"), static_cast<unsigned int>(status));
   }
-  log::print(target);
-  log::print(F(" L="));
-  log::print(left);
-  log::print(F(" R="));
-  log::print(right);
-  log::print(F(" over="));
-  log::print((left + right) / 2 - target);
+  log::fmt(F(" target=%l L=%l R=%l over=%l"), static_cast<long>(target),
+           static_cast<long>(left), static_cast<long>(right),
+           static_cast<long>((left + right) / 2 - target));
   if (stats.cruiseSamples > 0) {
-    log::print(F(" cruisePwm="));
-    log::print(stats.cruisePwmSum / stats.cruiseSamples);
-    log::print(F(" cruiseV="));
-    log::print(stats.cruiseSpeedSum / stats.cruiseSamples);
+    log::fmt(F(" cruisePwm=%2 cruiseV=%2"),
+             static_cast<double>(stats.cruisePwmSum / stats.cruiseSamples),
+             static_cast<double>(stats.cruiseSpeedSum / stats.cruiseSamples));
   }
   if (stats.overruns > 0) {
-    log::print(F(" overruns="));
-    log::print(static_cast<unsigned int>(stats.overruns));
+    log::fmt(F(" overruns=%u"), static_cast<unsigned int>(stats.overruns));
   }
-  if (!settled) log::print(F(" settle=TIMEOUT"));
+  if (!settled) log::fmt(F(" settle=TIMEOUT"));
   log::println();
 }
 
-}  // namespace
+/// Learned brake lead [ticks, float] -> profile ticks.
+int32_t roundTicks(const float ticks) {
+  return static_cast<int32_t>(ticks + 0.5f);
+}
 
-MotionController::MotionController(const Motor& leftMotor,
-                                   const Motor& rightMotor,
-                                   const Encoder& leftEncoder,
-                                   const Encoder& rightEncoder,
-                                   const UltrasonicSensor& leftSonar,
-                                   const UltrasonicSensor& rightSonar)
-    : leftMotor_(leftMotor),
-      rightMotor_(rightMotor),
-      leftEncoder_(leftEncoder),
-      rightEncoder_(rightEncoder),
-      leftSonar_(leftSonar),
-      rightSonar_(rightSonar),
-      headingPid_(kHeadingGains, cfg::kControlPeriodS),
-      speedPid_(kSpeedGains, cfg::kControlPeriodS),
-      centering_(load(kCenteringParams)) {}
+}  // namespace
 
 void MotionController::begin() {
   leftMotor_.begin();
@@ -158,12 +122,21 @@ bool MotionController::waitForStandstill() const {
   }
 }
 
-MotionController::MoveResult MotionController::move(
-    const int32_t targetTicks, const int8_t dirLeft, const int8_t dirRight,
-    const MoveParams& params, const int32_t carriedHeading,
-    const CenteringWalls* centering) {
-  MoveResult result = {Status::kOk, true, 0, 0};
+MoveReport MotionController::move(const int32_t targetTicks,
+                                  const int8_t dirLeft, const int8_t dirRight,
+                                  const MoveParams& params,
+                                  const int32_t carriedHeading,
+                                  const CenteringWalls* centering) {
+  MoveReport result = {Status::kOk, true, targetTicks, 0, 0, carriedHeading,
+                       0.0f};
   if (targetTicks <= 0) return result;
+
+  // Motor model of each wheel for this kind of move (self-calibration plus
+  // floor load, or the defaults).
+  const WheelCalibration wheelL =
+      calibration::wheelModel(calibration_, Wheel::kLeft, params.kind);
+  const WheelCalibration wheelR =
+      calibration::wheelModel(calibration_, Wheel::kRight, params.kind);
 
   leftEncoder_.reset();
   rightEncoder_.reset();
@@ -204,21 +177,39 @@ MotionController::MoveResult MotionController::move(
       ++stats.overruns;
     }
 
-    result.ticksLeft = leftEncoder_.count();
-    result.ticksRight = rightEncoder_.count();
+    result.left = leftEncoder_.count();
+    result.right = rightEncoder_.count();
 
     // Stop on the AVERAGE distance of both wheels, both wheels at once.
-    const int32_t travelled = (result.ticksLeft + result.ticksRight) / 2;
-    if (profile.brakePointReached(travelled)) break;
+    const int32_t travelled = (result.left + result.right) / 2;
+    // Encoder heading integral (learning): heading x distance increment.
+    result.headingIntegral +=
+        static_cast<float>(carriedHeading + result.left - result.right) *
+        static_cast<float>(travelled - prevTravelled);
+    if (profile.brakePointReached(travelled)) {
+      prevTravelled = travelled;
+      break;
+    }
 
     const uint32_t nowMs = hal::nowMs();
     if (travelled != prevTravelled) lastProgressMs = nowMs;
     if (nowMs - lastProgressMs > cfg::kStallTimeoutMs) {
       result.status = Status::kStall;
+      prevTravelled = travelled;
       break;
     }
     if (nowMs - startMs > cfg::kMoveTimeoutMs) {
       result.status = Status::kMoveTimeout;
+      prevTravelled = travelled;
+      break;
+    }
+    // A silent encoder halves the average distance (the robot would drive
+    // 2 cells) while the stall check above still sees progress.
+    if (encoderPairFaulty(result.left, result.right,
+                          cfg::kEncoderFaultMinTravelTicks,
+                          cfg::kEncoderFaultMinRatio)) {
+      result.status = Status::kEncoderFault;
+      prevTravelled = travelled;
       break;
     }
 
@@ -230,22 +221,32 @@ MotionController::MoveResult MotionController::move(
 
     const float targetSpeed = profile.next(travelled);
 
-    // Forward speed: stiction offset + feed-forward + PI on the average
-    // wheel speed. The full breakaway offset applies only at rest; once
-    // rolling (with hysteresis) the lower kinetic offset lets the PI
-    // actually control the creep speed.
+    // Forward speed: per-wheel stiction offset + per-wheel feed-forward +
+    // one PI on the average wheel speed. The full breakaway offset applies
+    // only at rest; once rolling (with hysteresis) the fitted intercept lets
+    // the PI actually control the creep speed.
     rolling = updateRolling(rolling, measuredSpeed, cfg::kRollingEnterTpp,
                             cfg::kRollingExitTpp);
-    const float offset =
-        stictionPwm(rolling, params.staticPwm, params.kineticPwm);
-    float basePwm = offset + cfg::kFfPwmPerTpp * targetSpeed +
-                    speedPid_.update(targetSpeed - measuredSpeed, speedClamp);
-    const bool floored = basePwm < offset;
-    if (floored) basePwm = offset;
+    const float offsetL =
+        stictionPwm(rolling, wheelL.staticPwm, wheelL.ffOffsetPwm);
+    const float offsetR =
+        stictionPwm(rolling, wheelR.staticPwm, wheelR.ffOffsetPwm);
+    const float pi = speedPid_.update(targetSpeed - measuredSpeed, speedClamp);
+    float baseL = offsetL + wheelL.ffSlopePwmPerTpp * targetSpeed + pi;
+    float baseR = offsetR + wheelR.ffSlopePwmPerTpp * targetSpeed + pi;
+    bool floored = false;
+    if (baseL < offsetL) {
+      baseL = offsetL;
+      floored = true;
+    }
+    if (baseR < offsetR) {
+      baseR = offsetR;
+      floored = true;
+    }
 
     if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
       if (targetSpeed >= params.profile.cruiseSpeed) {
-        stats.cruisePwmSum += basePwm;
+        stats.cruisePwmSum += 0.5f * (baseL + baseR);
         stats.cruiseSpeedSum += measuredSpeed;
         ++stats.cruiseSamples;
       }
@@ -257,7 +258,7 @@ MotionController::MoveResult MotionController::move(
     if (rampPeriods < cfg::kHeadingCarryRampPeriods) ++rampPeriods;
     const float carry = carryStep * rampPeriods;
     float headingError =
-        carry + static_cast<float>(result.ticksLeft - result.ticksRight);
+        carry + static_cast<float>(result.left - result.right);
     if (centeringOn) {
       if (travelled >= halfway) centering_.setWalls(centering->next);
       headingError += centering_.correctionTicks();
@@ -265,9 +266,13 @@ MotionController::MoveResult MotionController::move(
     const float correction = headingPid_.update(headingError, headingClamp);
 
     // Per-wheel floor: never below breakaway at rest, kinetic once rolling.
-    const WheelMix mix =
-        mixWheels(basePwm, correction, cfg::kLeftPwmTrim, cfg::kRightPwmTrim,
-                  offset * cfg::kWheelFloorFraction, kMaxPwm);
+    const WheelMix mix = mixWheels(
+        baseL, baseR, correction,
+        stictionPwm(rolling, wheelL.staticPwm, wheelL.kineticPwm) *
+            cfg::kWheelFloorFraction,
+        stictionPwm(rolling, wheelR.staticPwm, wheelR.kineticPwm) *
+            cfg::kWheelFloorFraction,
+        kMaxPwm);
     speedClamp = mix.speedClamp;
     speedClamp.low = speedClamp.low || floored;
     headingClamp = mix.headingClamp;
@@ -284,19 +289,32 @@ MotionController::MoveResult MotionController::move(
         const UltrasonicSensor& sonar =
             side == Side::kLeft ? leftSonar_ : rightSonar_;
         const uint16_t echoUs = sonar.pingUs(cfg::kCenteringPingMaxCm);
-        centering_.addReading(
-            side, static_cast<float>(echoUs) / UltrasonicSensor::kUsPerCm);
+        centering_.addReading(side,
+                              static_cast<float>(echoUs) / cfg::kSonarUsPerCm);
       }
     }
   }
 
   stop();
+  if constexpr (cfg::logEnabled(LogLevel::kError)) {
+    // Printed after braking (Serial may block). Which wheel is silent:
+    if (result.status == Status::kEncoderFault) {
+      log::fmtln(F("ENCODER FAULT L=%l R=%l"),
+                 static_cast<long>(result.left),
+                 static_cast<long>(result.right));
+    }
+  }
   result.settled = waitForStandstill();
-  result.ticksLeft = leftEncoder_.count();
-  result.ticksRight = rightEncoder_.count();
+  result.left = leftEncoder_.count();
+  result.right = rightEncoder_.count();
+  // The coast after braking also moves (and may turn) the robot.
+  const int32_t finalTravelled = (result.left + result.right) / 2;
+  result.headingIntegral +=
+      static_cast<float>(carriedHeading + result.left - result.right) *
+      static_cast<float>(finalTravelled - prevTravelled);
 
   if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-    logMove(targetTicks, result.ticksLeft, result.ticksRight, result.status,
+    logMove(targetTicks, result.left, result.right, result.status,
             result.settled, stats);
   }
   return result;
@@ -304,45 +322,76 @@ MotionController::MoveResult MotionController::move(
 
 void MotionController::logCarry(const bool settled) const {
   if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-    log::print(F("H="));
-    log::print(headingCarry_);
-    if (!settled) log::print(F(" (unsettled)"));
-    log::println();
+    log::fmtln(F("H=%l%s"), static_cast<long>(headingCarry_),
+               settled ? F("") : F(" (unsettled)"));
   }
 }
 
-Status MotionController::driveForward(const CenteringWalls& walls) {
+Status MotionController::driveForward(const CenteringWalls& walls,
+                                      MoveReport& report) {
   // Start with the heading error left over from previous moves so it is
   // corrected instead of accumulating cell after cell.
-  const MoveParams params = load(kForwardMove);
-  const MoveResult result = move(cfg::kTicksPerCell, kForward, kForward,
-                                 params, headingCarry_, &walls);
+  MoveParams params = loadFlash(kForwardMove);
+  params.profile.brakeLeadTicks =
+      roundTicks(calibration_.learned.brakeLeadForward);
+  report = move(calibration::ticksPerCell(calibration_), kForward, kForward,
+                params, headingCarry_, &walls);
   // Also after a settle timeout: the move has already acted on the old
   // carry, so the counts at the timeout are the best estimate there is.
   headingCarry_ =
-      heading::carryAfterForward(headingCarry_, result.ticksLeft,
-                                 result.ticksRight, cfg::kHeadingCarryLimit);
-  logCarry(result.settled);
-  return result.status;
+      heading::carryAfterForward(headingCarry_, report.left, report.right,
+                                 cfg::kHeadingCarryLimit);
+  logCarry(report.settled);
+  return report.status;
 }
 
 Status MotionController::turn(const TurnDirection direction,
-                              const uint8_t quarterTurns) {
+                              const uint8_t quarterTurns, MoveReport& report) {
+  report = MoveReport{Status::kOk, true, 0, 0, 0, headingCarry_, 0.0f};
   if (quarterTurns == 0) return Status::kOk;
-  if (quarterTurns > kMaxQuarterTurns) return Status::kInvalidArgument;
+  if (quarterTurns > kMaxQuarterTurns) {
+    report.status = Status::kInvalidArgument;
+    return report.status;
+  }
 
-  const int32_t nominal = static_cast<int32_t>(quarterTurns) * cfg::kTicksPer90;
+  const int32_t nominal = static_cast<int32_t>(quarterTurns) *
+                          calibration::ticksPer90(calibration_);
   const int8_t sign = static_cast<int8_t>(direction);
   const int32_t target = heading::turnTarget(nominal, sign, headingCarry_);
 
-  const MoveParams params = load(kTurnMove);
-  const MoveResult result = move(target, sign, static_cast<int8_t>(-sign),
-                                 params, 0, nullptr);
-  headingCarry_ = heading::carryAfterTurn(headingCarry_, sign,
-                                         result.ticksLeft, result.ticksRight,
-                                         nominal, cfg::kHeadingCarryLimit);
-  logCarry(result.settled);
-  return result.status;
+  MoveParams params = loadFlash(kTurnMove);
+  params.profile.brakeLeadTicks =
+      roundTicks(calibration_.learned.brakeLeadTurn);
+  report = move(target, sign, static_cast<int8_t>(-sign), params, 0, nullptr);
+  report.carryBefore = headingCarry_;
+  headingCarry_ = heading::carryAfterTurn(headingCarry_, sign, report.left,
+                                         report.right, nominal,
+                                         cfg::kHeadingCarryLimit);
+  logCarry(report.settled);
+  return report.status;
+}
+
+Status MotionController::adjustStraight(const int32_t signedTicks,
+                                        MoveReport& report) {
+  const int8_t dir = signedTicks >= 0 ? kForward : kBackward;
+  const int32_t ticks = signedTicks >= 0 ? signedTicks : -signedTicks;
+  // The whole adjustment at creep speed (cruise = creep). It brakes from
+  // creep speed like a cell move, so the learned forward lead applies, but
+  // at most half the move so that a tiny correction is not swallowed.
+  MoveParams params = loadFlash(kForwardMove);
+  params.profile.cruiseSpeed = params.profile.creepSpeed;
+  params.profile.creepTicks = 0;
+  params.profile.brakeLeadTicks = learning::alignmentBrakeLead(
+      ticks, roundTicks(calibration_.learned.brakeLeadForward));
+  // Carry 0 as the setpoint: equal L/R, so the adjustment itself does not
+  // rotate the robot. The forward carry ramp would steer with the wrong
+  // sign in reverse, and the next cell move corrects the carry anyway.
+  report = move(ticks, dir, dir, params, 0, nullptr);
+  report.carryBefore = headingCarry_;
+  headingCarry_ = heading::carryAfterStraight(
+      headingCarry_, dir, report.left, report.right, cfg::kHeadingCarryLimit);
+  logCarry(report.settled);
+  return report.status;
 }
 
 }  // namespace micromouse

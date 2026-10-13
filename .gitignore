@@ -1,2 +1,6 @@
 .pio
 .idea
+
+# Simulator output (see README "Simulator / visualisation"): generated HTML
+# animations, not source.
+tools/sim/out/*.html

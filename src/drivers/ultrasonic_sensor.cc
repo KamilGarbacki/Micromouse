@@ -12,8 +12,8 @@ namespace {
 
 namespace pins = config::pins;
 
-static_assert(US_ROUNDTRIP_CM == static_cast<int>(UltrasonicSensor::kUsPerCm),
-              "kUsPerCm must match NewPing's US_ROUNDTRIP_CM");
+static_assert(US_ROUNDTRIP_CM == static_cast<int>(config::kNewPingUsPerCm),
+              "config::kNewPingUsPerCm must match NewPing's US_ROUNDTRIP_CM");
 
 // NewPing objects live here so that no header above the driver layer sees
 // NewPing.h (and through it Arduino.h). The constructor only records the pin
@@ -57,11 +57,6 @@ uint16_t rangeOrDefault(const uint16_t maxCm) {
   return maxCm > 0 ? maxCm : config::kMappingMaxCm;
 }
 }  // namespace
-
-uint16_t UltrasonicSensor::pingCm(const uint16_t maxCm) const {
-  return static_cast<uint16_t>(
-      gSonars[static_cast<uint8_t>(id_)].ping_cm(rangeOrDefault(maxCm)));
-}
 
 uint16_t UltrasonicSensor::pingUs(const uint16_t maxCm) const {
   return static_cast<uint16_t>(

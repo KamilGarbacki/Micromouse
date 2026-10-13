@@ -14,11 +14,22 @@
 
 namespace micromouse::heading {
 
-/// Carry after a straight move that ended with `left` / `right` ticks.
+/// Carry after a straight move driven in direction `dir` (+1 forward, -1
+/// backward) that ended with `left` / `right` (direction-blind) ticks.
+/// Forward, the left wheel running further turns the robot clockwise; in
+/// reverse the same count difference turns it COUNTER-clockwise, so the
+/// difference enters with the commanded sign.
+constexpr int32_t carryAfterStraight(const int32_t carry, const int8_t dir,
+                                     const int32_t left, const int32_t right,
+                                     const int32_t limit) {
+  return util::clamp<int32_t>(carry + dir * (left - right), -limit, limit);
+}
+
+/// Carry after a forward straight move that ended with `left` / `right`.
 constexpr int32_t carryAfterForward(const int32_t carry, const int32_t left,
                                     const int32_t right,
                                     const int32_t limit) {
-  return util::clamp<int32_t>(carry + (left - right), -limit, limit);
+  return carryAfterStraight(carry, 1, left, right, limit);
 }
 
 /// Target ticks per wheel of a spin with nominal length `nominal`, in
@@ -31,14 +42,26 @@ constexpr int32_t turnTarget(const int32_t nominal, const int8_t sign,
                               nominal + nominal / 2);
 }
 
-/// Carry after a spin: in a spin both (direction-blind) counters count up
-/// and the heading changes by sign * (L + R) left-minus-right ticks, so
-/// new = old + actual rotation - intended rotation (2 * nominal).
+/// Carry after a spin, before the limit: in a spin both (direction-blind)
+/// counters count up and the heading changes by sign * (L + R)
+/// left-minus-right ticks, so new = old + actual rotation - intended
+/// rotation (2 * nominal). If this exceeds the limit, the carry no longer
+/// describes the encoders' belief (the turn learning skips such a turn).
+constexpr int32_t carryAfterTurnUnclamped(const int32_t carry,
+                                          const int8_t sign,
+                                          const int32_t left,
+                                          const int32_t right,
+                                          const int32_t nominal) {
+  return carry + sign * (left + right - 2 * nominal);
+}
+
+/// Carry after a spin (carryAfterTurnUnclamped, clamped to +-limit).
 constexpr int32_t carryAfterTurn(const int32_t carry, const int8_t sign,
                                  const int32_t left, const int32_t right,
                                  const int32_t nominal, const int32_t limit) {
-  return util::clamp<int32_t>(carry + sign * (left + right - 2 * nominal),
-                              -limit, limit);
+  return util::clamp<int32_t>(
+      carryAfterTurnUnclamped(carry, sign, left, right, nominal), -limit,
+      limit);
 }
 
 }  // namespace micromouse::heading

@@ -15,10 +15,10 @@ constexpr uint8_t kMazeMaxCols = 8;
 
 // The maze actually run.
 constexpr uint8_t kMazeRows = 5;
-constexpr uint8_t kMazeCols = 4;
+constexpr uint8_t kMazeCols = 3;
 
 constexpr Cell kStartCell = {4, 0};  // bottom-left
 constexpr Direction kStartHeading = Direction::kUp;
-constexpr Cell kGoalCell = {0, 3};  // top-right
+constexpr Cell kGoalCell = {0, 2};  // top-right
 
 }  // namespace micromouse::config
