@@ -10,6 +10,7 @@
 #include "control/learning.h"
 #include "control/motion_controller.h"
 #include "hal/log.h"
+#include "navigation/explorer.h"
 
 namespace micromouse {
 
@@ -30,7 +31,8 @@ struct ForwardObservation {
   bool turnedBefore;       ///< the move started with a turn
   float frontBeforeMm;     ///< SENSE front reading before the move
   float frontAfterMm;      ///< fresh front reading after it (pre-alignment)
-  uint8_t sideMask;        ///< sides with a known wall in the start cell
+  uint8_t sideMask;        ///< sides with a known PHYSICAL wall in the
+                           ///< start cell (sideWallMask())
   float sideStartMm[2];    ///< side readings at the start of the move
   float sideEndMm[2];      ///< side readings at the end (pre-alignment)
 };
@@ -71,6 +73,20 @@ class OnlineLearning {
   /// `frontWall` / `leftWall` / `rightWall` = the map has a wall there.
   /// Commits the pending samples whose walls are confirmed, drops the rest.
   void confirm(bool frontWall, bool leftWall, bool rightWall);
+
+  /// confirm() with the PHYSICAL walls (Explorer::physicalWall()) around
+  /// the explorer's pose: a virtual open-floor boundary never confirms a
+  /// sample (no sensor could have measured it).
+  void confirmAt(const Explorer& explorer) {
+    confirm(explorer.physicalWallAt(Relative::kForward),
+            explorer.physicalWallAt(Relative::kLeft),
+            explorer.physicalWallAt(Relative::kRight));
+  }
+
+  /// ForwardObservation::sideMask for a straight move in `heading` from the
+  /// explorer's cell: the side walls beside it that a sensor can see
+  /// (physical only; a virtual boundary is no drift reference).
+  static uint8_t sideWallMask(const Explorer& explorer, Direction heading);
 
   /// True if the learned record changed since the last save.
   bool dirty() const { return dirty_; }

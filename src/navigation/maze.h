@@ -17,8 +17,12 @@ using CellIndex = uint8_t;
 /// Every cell stores one byte with a "wall" and a "known" bit per side, and
 /// one byte with a 2-bit counter of pending contradicting observations per
 /// side. A shared wall is always written to both cells, so both views agree.
-/// The outer boundary is a known wall and cannot be changed. Unknown
-/// interior walls are reported as not present (planners are optimistic).
+/// The outer boundary is a wall and cannot be changed: it blocks travel in
+/// every mode. With `physicalBoundary` (reset()) it is a KNOWN wall, like
+/// an observed one; otherwise (open floor) it is a VIRTUAL wall: present
+/// but never "known", since no sensor can see it (see hasPhysicalWall()).
+/// Unknown interior walls are reported as not present (planners are
+/// optimistic).
 ///
 /// Observations are asymmetric-sticky: an unknown side becomes known at
 /// once, but a known side flips only after `flipObservations` consecutive
@@ -35,11 +39,14 @@ class Maze {
 
   /// Resizes to `rows` x `cols` and forgets all interior walls.
   /// `flipObservations` (1..4, 1 = latest wins) is the number of consecutive
-  /// contradicting observations needed to change a known side. Returns
+  /// contradicting observations needed to change a known side.
+  /// `physicalBoundary`: the outer boundary is a real (known) wall; false =
+  /// open floor, a virtual (wall, but not known) boundary. Returns
   /// kInvalidArgument (and becomes empty) if the size is 0 or exceeds the
   /// capacity, or `flipObservations` is out of range.
   Status reset(uint8_t rows, uint8_t cols,
-               uint8_t flipObservations = config::kWallFlipObservations);
+               uint8_t flipObservations = config::kWallFlipObservations,
+               bool physicalBoundary = true);
 
   uint8_t rows() const { return rows_; }
   uint8_t cols() const { return cols_; }
@@ -60,12 +67,27 @@ class Maze {
   /// walls. kOutOfBounds if the cell is outside the maze.
   Status setWall(Cell cell, Direction dir, bool present);
 
-  /// True if the side has been observed (boundary sides always are).
+  /// True if side `dir` of `cell` lies on the outer edge of the grid (no
+  /// neighbour there). False for a cell outside the maze.
+  bool isBoundary(const Cell cell, const Direction dir) const {
+    Cell unused{};
+    return contains(cell) && !neighbour(cell, dir, unused);
+  }
+
+  /// True if the side has been observed (a physical boundary always is, a
+  /// virtual one never).
   bool isKnown(Cell cell, Direction dir) const;
 
-  /// True if a wall is known to be there. Unknown -> false (optimistic).
-  /// Cells outside the maze are treated as walled in.
+  /// True if a wall blocks travel there (observed, or the boundary, also a
+  /// virtual one). Unknown -> false (optimistic). Cells outside the maze
+  /// are treated as walled in. For PLANNING.
   bool hasWall(Cell cell, Direction dir) const;
+
+  /// True if a wall a sensor should SEE is there: a known wall (observed
+  /// interior wall, or a physical boundary), never a virtual open-floor
+  /// boundary. Cells outside the maze are walled in (as hasWall()). For SENSING
+  /// expectations (plausibility, learning, centering, the run log).
+  bool hasPhysicalWall(Cell cell, Direction dir) const;
 
   /// Index of a cell; precondition: contains(cell).
   CellIndex indexOf(Cell cell) const {

@@ -81,6 +81,56 @@ void test_boundary_is_known_wall_interior_unknown() {
   TEST_ASSERT_FALSE(maze.isKnown(Cell{1, 1}, Direction::kUp));
 }
 
+void test_virtual_boundary_blocks_travel_but_is_not_physical() {
+  // Open floor (physicalBoundary = false): the edge still blocks travel
+  // (hasWall), but it is not a known / physical wall a sensor could see.
+  Maze maze;
+  TEST_ASSERT_TRUE(maze.reset(3, 3, 2, false) == Status::kOk);
+  TEST_ASSERT_TRUE(maze.isBoundary(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_TRUE(maze.isBoundary(Cell{0, 0}, Direction::kLeft));
+  TEST_ASSERT_FALSE(maze.isBoundary(Cell{0, 0}, Direction::kRight));
+  TEST_ASSERT_FALSE(maze.isBoundary(Cell{1, 1}, Direction::kUp));
+  TEST_ASSERT_TRUE(maze.hasWall(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_FALSE(maze.isKnown(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_FALSE(maze.hasPhysicalWall(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_TRUE(maze.hasWall(Cell{2, 2}, Direction::kDown));
+  TEST_ASSERT_FALSE(maze.hasPhysicalWall(Cell{2, 2}, Direction::kDown));
+
+  // Readings at the virtual boundary (either way) change nothing.
+  TEST_ASSERT_TRUE(maze.setWall(Cell{0, 0}, Direction::kUp, false) ==
+                   Status::kOk);
+  TEST_ASSERT_TRUE(maze.setWall(Cell{0, 0}, Direction::kLeft, true) ==
+                   Status::kOk);
+  TEST_ASSERT_TRUE(maze.hasWall(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_FALSE(maze.hasPhysicalWall(Cell{0, 0}, Direction::kLeft));
+  TEST_ASSERT_FALSE(maze.isKnown(Cell{0, 0}, Direction::kLeft));
+
+  // An observed interior wall is physical in both modes.
+  maze.setWall(Cell{1, 1}, Direction::kRight, true);
+  TEST_ASSERT_TRUE(maze.hasPhysicalWall(Cell{1, 1}, Direction::kRight));
+  TEST_ASSERT_TRUE(maze.hasPhysicalWall(Cell{1, 2}, Direction::kLeft));
+
+  // The planner never leaves the grid: a 1x3 strip from the left end goes
+  // Right, never Up/Down/Left through the virtual edge.
+  Maze strip;
+  strip.reset(1, 3, 1, false);
+  FloodFill flood;
+  TEST_ASSERT_TRUE(flood.compute(strip, Cell{0, 2}) == Status::kOk);
+  TEST_ASSERT_EQUAL_UINT8(2, flood.distance(Cell{0, 0}));
+  Direction dir = Direction::kUp;
+  TEST_ASSERT_TRUE(strip.hasWall(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_TRUE(flood.bestDirection(strip, Cell{0, 0}, Direction::kUp,
+                                       dir) == Status::kOk);
+  TEST_ASSERT_TRUE(dir == Direction::kRight);
+
+  // Physical boundary (the default of Maze::reset): known, physical.
+  Maze walled;
+  walled.reset(3, 3);
+  TEST_ASSERT_TRUE(walled.hasPhysicalWall(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_TRUE(walled.isKnown(Cell{0, 0}, Direction::kUp));
+  TEST_ASSERT_FALSE(walled.hasPhysicalWall(Cell{1, 1}, Direction::kUp));
+}
+
 void test_set_wall_is_mirrored_to_neighbour() {
   Maze maze;
   maze.reset(3, 3);
@@ -321,6 +371,19 @@ void test_render_unreached_cell() {
   TEST_ASSERT_EQUAL_STRING("+---+---+\n| - | @ |\n+---+---+\n", buffer.text);
 }
 
+void test_render_draws_virtual_boundary_as_wall() {
+  // The maze dump shows the PLANNING map: the virtual edge blocks travel,
+  // so it is drawn like any wall.
+  Maze maze;
+  maze.reset(1, 2, 1, false);
+  maze.setWall(Cell{0, 0}, Direction::kRight, true);
+  FloodFill flood;
+  flood.compute(maze, Cell{0, 1});
+  Buffer buffer = {{0}, 0};
+  renderMaze(maze, flood, Cell{0, 1}, appendChar, &buffer);
+  TEST_ASSERT_EQUAL_STRING("+---+---+\n| - | @ |\n+---+---+\n", buffer.text);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_rotate_and_relative_are_inverse);
@@ -329,6 +392,7 @@ int main() {
   RUN_TEST(test_steps_follow_row_col_convention);
   RUN_TEST(test_reset_rejects_bad_sizes);
   RUN_TEST(test_boundary_is_known_wall_interior_unknown);
+  RUN_TEST(test_virtual_boundary_blocks_travel_but_is_not_physical);
   RUN_TEST(test_set_wall_is_mirrored_to_neighbour);
   RUN_TEST(test_boundary_walls_cannot_be_opened_and_bad_cells_rejected);
   RUN_TEST(test_sticky_wall_needs_consecutive_contradictions);
@@ -345,5 +409,6 @@ int main() {
   RUN_TEST(test_full_capacity_maze);
   RUN_TEST(test_render_small_maze);
   RUN_TEST(test_render_unreached_cell);
+  RUN_TEST(test_render_draws_virtual_boundary_as_wall);
   return UNITY_END();
 }

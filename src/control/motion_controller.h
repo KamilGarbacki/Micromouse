@@ -128,7 +128,7 @@ class MotionController {
                   const CenteringWalls* centering);
   bool waitForStandstill() const;
   static void driveWheel(const Motor& motor, float pwm, int8_t direction);
-  void logCarry(bool settled) const;
+  void logCarry() const;
 
   const Motor& leftMotor_;
   const Motor& rightMotor_;

@@ -18,41 +18,49 @@ using config::LogLevel;
 // plain info build (uno) also gets the absolute N/E/S/W sides.
 constexpr bool kPrintAbsoluteWalls = !cfg::logEnabled(LogLevel::kDebug);
 
-// Flash is tight (see README "Flash budget"): one char per wall ('#'/'.')
-// instead of a "WALL"/"open" word, so a step line costs plain %c
-// conversions, not %s + a helper returning a flash string.
-char wallChar(const bool wall) { return wall ? '#' : '.'; }
+// Flash is tight (see README "Flash budget"): one char per side ('#' wall,
+// '.' open, '+' virtual open-floor boundary - runLogWallSymbol()), printed
+// with plain print(char) calls, not %s + a helper returning a flash string.
+// `virtualSides` = boundarySides() of the step's cell in an open-floor
+// log, 0 otherwise.
+void printSide(const uint8_t virtualSides, const Direction dir,
+               const bool wall) {
+  log::print(runLogWallSymbol(virtualSides, static_cast<uint8_t>(dir), wall));
+}
 
-void printStep(const uint16_t moveNumber, const RunStep& step,
-              const uint8_t rows, const uint8_t cols) {
+/// `number` is the 1-based record number (README "Run log"): the final
+/// "no move" record of a fault gets the next number too.
+void printStep(const uint16_t number, const RunStep& step,
+               const uint8_t rows, const uint8_t cols,
+               const bool virtualBoundary) {
   // Plain print() calls, not fmt(): a long %-format with many conversions
   // costs more code to marshal on the AVR than a sequence of simple,
   // non-variadic calls (measured; see README "Flash budget").
   log::print(' ');
-  log::print(static_cast<unsigned int>(moveNumber));
+  log::print(static_cast<unsigned int>(number));
   log::print(' ');
   log::print(static_cast<unsigned int>(step.cell.row));
   log::print(',');
   log::print(static_cast<unsigned int>(step.cell.col));
   log::print('@');
   log::print(directionLetter(step.heading));
-  log::print(F("  "));
-  log::print(wallChar(step.wallLeft));
-  log::print(wallChar(step.wallFront));
-  log::print(wallChar(step.wallRight));
-  log::print(F("  "));
+  log::print(' ');
+  const uint8_t virtualSides =
+      virtualBoundary ? boundarySides(step.cell, rows, cols) : 0;
+  printSide(virtualSides, rotate(step.heading, Relative::kLeft),
+            step.wallLeft);
+  printSide(virtualSides, step.heading, step.wallFront);
+  printSide(virtualSides, rotate(step.heading, Relative::kRight),
+            step.wallRight);
+  log::print(' ');
   if constexpr (kPrintAbsoluteWalls) {
     bool abs[kDirectionCount];
     absoluteWalls(step.cell, step.heading, step.wallLeft, step.wallFront,
-                 step.wallRight, rows, cols, abs);
-    log::print(wallChar(abs[static_cast<uint8_t>(Direction::kUp)]));
-    log::print(wallChar(abs[static_cast<uint8_t>(Direction::kRight)]));
-    log::print(wallChar(abs[static_cast<uint8_t>(Direction::kDown)]));
-    log::print(wallChar(abs[static_cast<uint8_t>(Direction::kLeft)]));
-    log::print(F("  "));
-  } else {
-    (void)rows;
-    (void)cols;
+                  step.wallRight, rows, cols, abs);
+    for (uint8_t d = 0; d < kDirectionCount; ++d) {  // N E S W
+      printSide(virtualSides, static_cast<Direction>(d), abs[d]);
+    }
+    log::print(' ');
   }
   log::print(step.noMove ? '-' : directionLetter(step.move));
   log::println();
@@ -85,8 +93,8 @@ void printRunLogEnd(const RunOutcome outcome, const Status fault,
   // A non-fault end prints "OK" instead of a status name, and the
   // cell/heading it is given (the goal).
   const bool isFault = outcome == RunOutcome::kFault;
-  log::print(F("END RUN result "));
-  log::print(isFault ? F("FAULT") : F("GOAL_REACHED"));
+  log::print(F("END RUN "));
+  log::print(isFault ? F("FAULT") : F("GOAL"));
   log::print(' ');
   log::print(isFault ? statusName(fault) : F("OK"));
   log::print(F(" at "));
@@ -117,15 +125,18 @@ void printStoredRunLog(const RunLogReadFn read, const uint16_t address,
                    static_cast<Direction>(header.startHeading)};
   const Cell goal{header.goalRow, header.goalCol};
   printRunLogStart(header.rows, header.cols, start, goal);
-  // Step line format (README "Run log"): n, pos row,col@heading, the
+  // Step line format (README "Run log"): n (the 1-based record number,
+  // also for the final "no move" record), pos row,col@heading, the
   // relative walls L F R (+ the absolute walls N E S W where flash allows,
   // see kPrintAbsoluteWalls), the move direction ('-' for the one possible
-  // final "no move" record). # = wall, . = open.
-  uint16_t moveNumber = 0;
+  // final "no move" record). # = wall, . = open, + = virtual boundary.
+  const bool virtualBoundary = (header.flags & kRunLogOpenFloorFlag) != 0;
+  uint16_t moves = 0;
   for (uint16_t i = 0; i < header.stepCount; ++i) {
     const RunStep step = readRunLogStep(read, address, i);
-    if (!step.noMove) ++moveNumber;
-    printStep(moveNumber, step, header.rows, header.cols);
+    if (!step.noMove) ++moves;
+    printStep(static_cast<uint16_t>(i + 1), step, header.rows, header.cols,
+              virtualBoundary);
   }
   if ((header.flags & kRunLogTruncatedFlag) != 0) {
     log::print(F("(truncated)"));
@@ -138,7 +149,7 @@ void printStoredRunLog(const RunLogReadFn read, const uint16_t address,
     const Cell faultCell{header.faultRow, header.faultCol};
     printRunLogEnd(static_cast<RunOutcome>(header.outcome),
                   static_cast<Status>(header.faultStatus), faultCell,
-                  static_cast<Direction>(header.faultHeading), moveNumber);
+                  static_cast<Direction>(header.faultHeading), moves);
   }
   log::print(F("=== END LOG ==="));
   log::println();

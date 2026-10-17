@@ -20,8 +20,10 @@
 
 namespace micromouse {
 
-/// One step: the pose BEFORE the move, the relative wall readings taken
-/// there (robot stopped, SENSE), and the direction driven. `noMove` marks
+/// One step: the pose BEFORE the move, the relative PHYSICAL walls known
+/// there after the SENSE (Explorer::physicalWall(): a virtual open-floor
+/// boundary is stored as 0, a physical boundary as 1), and the direction
+/// driven. `noMove` marks
 /// the (at most one, final) record of a run that halts in FAULT before a
 /// move could be attempted (a SENSE or PLAN failure): the robot stopped at
 /// `cell`/`heading` with whatever walls are known there, and `move` is
@@ -54,16 +56,32 @@ void absoluteWalls(Cell cell, Direction heading, bool wallLeft,
                    bool wallFront, bool wallRight, uint8_t rows,
                    uint8_t cols, bool out[kDirectionCount]);
 
+/// Outer-boundary sides of `cell` in a `rows` x `cols` maze: bit d set
+/// (d = static_cast<uint8_t>(Direction)) if that side is on the grid edge.
+uint8_t boundarySides(Cell cell, uint8_t rows, uint8_t cols);
+
+/// Printed symbol of side `dir` (README "Run log"): '+' if its bit is set
+/// in `virtualSides` (boundarySides() of the cell in a run logged in
+/// open-floor mode, else 0: the grid edge is impassable for planning, but
+/// no physical wall was there to sense), otherwise '#' for `wall`, '.'
+/// for open.
+constexpr char runLogWallSymbol(const uint8_t virtualSides,
+                                const uint8_t dir, const bool wall) {
+  return ((virtualSides >> dir) & 1u) != 0 ? '+' : (wall ? '#' : '.');
+}
+
 enum class RunLogState : uint8_t { kInProgress = 1, kComplete = 2 };
 enum class RunOutcome : uint8_t { kNone = 0, kGoalReached = 1, kFault = 2 };
 
-/// Validity of a stored header and its steps; see readRunLog().
+/// Validity of a stored header and its steps; see readRunLog(). kValid
+/// covers a header recovered from a torn write (see readRunLog()): the
+/// prefix of the run up to the last write that fully completed.
 enum class RunLogValidity : uint8_t {
   kValid = 0,
   kEmpty,       ///< erased EEPROM (magic 0xFFFF)
   kBadMagic,    ///< another / older layout
   kBadVersion,
-  kBadCrc,
+  kBadCrc,      ///< not explained by a known torn-write pattern either
   kOutOfRange,  ///< state / stepCount / outcome outside what can be stored
 };
 
@@ -86,14 +104,15 @@ struct RunLogHeader {
   uint8_t startHeading;  ///< Direction
   uint8_t goalRow;
   uint8_t goalCol;
-  uint8_t flags;         ///< bit 0: truncated (capacity was reached)
+  uint8_t flags;         ///< bit 0: truncated (capacity was reached),
+                         ///< bit 1: open floor (virtual boundary)
   uint16_t stepCount;    ///< records stored, <= capacity (moves + at most
                          ///< one final "no move" record; the app counts
                          ///< actual moves itself, see Explorer::cellsMoved)
   uint8_t outcome;       ///< RunOutcome, meaningful once state == kComplete
   uint8_t faultStatus;   ///< Status, meaningful if outcome == kFault
-  uint8_t faultRow;
-  uint8_t faultCol;
+  uint8_t faultRow;      ///< END pose of either outcome (the fault cell,
+  uint8_t faultCol;      ///< or the goal cell), once state == kComplete
   uint8_t faultHeading;  ///< Direction
   uint8_t reserved;      ///< 0; keeps crc at an even offset
   uint16_t crc;
@@ -102,6 +121,11 @@ struct RunLogHeader {
 constexpr uint16_t kRunLogMagic = 0x524C;  // "RL"
 constexpr uint8_t kRunLogVersion = 1;
 constexpr uint8_t kRunLogTruncatedFlag = 0x01;
+/// The run was in open-floor mode (ExplorerParams::physicalBoundary false):
+/// boundary sides print as '+' (runLogWallSymbol). Logs written before this
+/// flag existed have it clear, which matches what they stored (boundary
+/// walls as 1), so the version is unchanged.
+constexpr uint8_t kRunLogOpenFloorFlag = 0x02;
 constexpr uint16_t kRunLogErasedMagic = 0xFFFF;  // erased EEPROM
 
 constexpr size_t kRunLogCrcOffset = offsetof(RunLogHeader, crc);
@@ -136,6 +160,22 @@ static_assert(static_cast<uint32_t>(kRunLogAddress) + kRunLogRegionSize <=
                   hal::kEepromSize,
               "run log overlaps the calibration records or exceeds the "
               "1 KB EEPROM");
+/// Ties the capacity above to the exploration budget it is sized from (the
+/// actually CONFIGURED maze, not just the maximum static one): truncation
+/// (RunLog::appendStep, the `truncated` flag), and with it the two
+/// unrecovered torn-write edge cases documented at readRunLog() in the
+/// .cc (a torn write of the truncated flag itself, and a stepCount tear on
+/// a byte-boundary increment such as 255 -> 256), can only happen once
+/// `stepCount` approaches `kRunLogCapacity` - i.e. only for a maze near the
+/// maximum static size (config::kMazeMaxRows/kMazeMaxCols). The configured
+/// maze (config::kMazeRows/kMazeCols) is far smaller, so this assert always
+/// holds with a wide margin in practice; it exists to catch the day it
+/// stops holding.
+static_assert(static_cast<uint32_t>(config::kMazeRows) * config::kMazeCols *
+                      config::kExplorationBudgetFactor + 1u <=
+                  kRunLogCapacity,
+              "the configured maze's exploration budget must fit in the "
+              "run log capacity");
 
 /// Byte-level EEPROM access the run log writes/reads through;
 /// hal::eepromRead / hal::eepromWrite match these signatures exactly.
@@ -152,7 +192,11 @@ uint16_t computeRunLogCrc(RunLogReadFn read, uint16_t address,
 /// Reads and validates the header at `address` (magic, version, state,
 /// `stepCount` within `capacity`, outcome range, CRC over the header and its
 /// steps). kValid covers both an in-progress (interrupted) and a complete
-/// run; the caller tells them apart with `out.state`.
+/// run; the caller tells them apart with `out.state`. If the stored CRC
+/// does not match, this also tries the two torn-write states a power loss
+/// can leave (see the comment in the .cc) before giving up with kBadCrc;
+/// when one matches, `out` is the recovered (slightly older, but internally
+/// consistent) header, not the raw bytes on disk.
 RunLogValidity readRunLog(RunLogReadFn read, uint16_t address,
                           uint16_t capacity, RunLogHeader& out);
 
@@ -163,7 +207,9 @@ RunStep readRunLogStep(RunLogReadFn read, uint16_t address, uint16_t index);
 /// the start, one per step (but EEPROM.update only actually rewrites the
 /// bytes that changed - stepCount and crc, 4 bytes - since the rest of the
 /// header is unchanged after the first write), and one at the end; see
-/// README "Run log" for the lifetime estimate.
+/// README "Run log" for the lifetime estimate. A power loss mid-write only
+/// loses that one write (readRunLog() recovers the previous, complete
+/// state) - see readRunLog() and the comment in the .cc.
 class RunLog {
  public:
   constexpr RunLog(const RunLogReadFn read, const RunLogWriteFn write,
@@ -173,17 +219,25 @@ class RunLog {
   /// START RUN: begins a new run, overwriting whatever was stored (the
   /// caller must have already read out the previous log). Writes the header
   /// "in progress, 0 steps" - this call IS the START RUN marker.
-  void startRun(uint8_t rows, uint8_t cols, Pose start, Cell goal);
+  /// `openFloor` sets kRunLogOpenFloorFlag (virtual boundary).
+  void startRun(uint8_t rows, uint8_t cols, Pose start, Cell goal,
+                bool openFloor = false);
 
   /// One step, appended while the robot is stopped (SENSE/PLAN; never from
   /// the 100 Hz move loop). No-op beyond `capacity` other than setting the
   /// truncated flag once; the run keeps going.
   void appendStep(const RunStep& step);
 
-  /// END RUN: the goal was reached.
-  void finishGoal();
+  /// END RUN: the goal was reached at `cell`/`heading` (stored in the
+  /// fault* pose fields, which hold the END pose of either outcome).
+  void finishGoal(Cell cell, Direction heading) {
+    finish(RunOutcome::kGoalReached, Status::kOk, cell, heading);
+  }
   /// END RUN: a fault occurred at `cell`/`heading`.
-  void finishFault(Status status, Cell cell, Direction heading);
+  void finishFault(const Status status, const Cell cell,
+                   const Direction heading) {
+    finish(RunOutcome::kFault, status, cell, heading);
+  }
 
   bool truncated() const {
     return (header_.flags & kRunLogTruncatedFlag) != 0;
@@ -192,6 +246,8 @@ class RunLog {
 
  private:
   void writeHeader() { write_(address_, &header_, sizeof(header_)); }
+  void finish(RunOutcome outcome, Status status, Cell cell,
+              Direction heading);
   uint16_t stepAddress(const uint16_t index) const {
     return static_cast<uint16_t>(address_ + sizeof(RunLogHeader) +
                                  index * sizeof(uint16_t));

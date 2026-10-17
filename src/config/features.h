@@ -27,6 +27,19 @@
 #define MM_FRONT_ALIGN 1
 #endif
 
+// Maze walls (see README "Open floor vs physical boundary"):
+//   0 = OPEN FLOOR (default): a mat with the cells outlined, no physical
+//       walls at all, not even the outer boundary. The grid edge is still
+//       impassable for planning, but it is a VIRTUAL wall: no sensor is
+//       expected to see it (no sensor-failure check, no learning, no
+//       centering against it). Interior walls, if any, are physical.
+//   1 = PHYSICAL BOUNDARY (competition maze): the outer boundary is a real
+//       wall that the sensors see, like every interior wall.
+// Also selectable with -D MM_PHYSICAL_BOUNDARY=1.
+#ifndef MM_PHYSICAL_BOUNDARY
+#define MM_PHYSICAL_BOUNDARY 0
+#endif
+
 // Startup menu with the bench tools (encoder check, motor self-calibration,
 // reset / print calibration): 1 = on. Off in the competition env `uno`
 // (saves ~3 KB of flash); on in `uno_setup`. Needs MM_LOG_LEVEL >= 1.
@@ -61,6 +74,10 @@ constexpr bool kWallCenteringEnabled = MM_WALL_CENTERING != 0;
 
 /// Front-wall alignment after straight moves (MM_FRONT_ALIGN).
 constexpr bool kFrontAlignEnabled = MM_FRONT_ALIGN != 0;
+
+/// The outer boundary is a physical wall (MM_PHYSICAL_BOUNDARY); false =
+/// open floor (virtual boundary). The default of ExplorerParams.
+constexpr bool kPhysicalBoundary = MM_PHYSICAL_BOUNDARY != 0;
 
 /// Online learning while driving (MM_LEARNING).
 constexpr bool kOnlineLearningEnabled = MM_LEARNING != 0;

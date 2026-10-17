@@ -5,7 +5,7 @@
 // (cell-to-cell moves only), not a hardware simulation.
 //
 // Usage: sim <maze.txt> [--noise p] [--seed n] [--dead-sensor L|F|R]
-//            [--out file.html]
+//            [--open-floor | --physical-boundary] [--out file.html]
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -60,8 +60,8 @@ void printUsage(const char* argv0) {
   std::cerr
       << "Usage: " << argv0
       << " <maze.txt> [--noise p] [--seed n] [--dead-sensor L|F|R] "
-         "[--out file.html]\n"
-         "  maze.txt       ASCII maze (see tools/sim/mazes/*.txt), S/G mark\n"
+         "[--open-floor | --physical-boundary] [--out file.html]\n"
+         "  maze.txt      ASCII maze (see tools/sim/mazes/*.txt), S/G mark\n"
          "                 the start/goal; if absent, the firmware config's\n"
          "                 start cell/heading and goal are used.\n"
          "  --noise p      probability (0..1) of flipping a wall reading per\n"
@@ -69,6 +69,16 @@ void printUsage(const char* argv0) {
          "  --seed n       RNG seed for --noise (default 1)\n"
          "  --dead-sensor  L|F|R: that sensor never reports an echo\n"
          "                 (exercises SENSOR_FAILURE)\n"
+         "  --open-floor   no physical outer boundary (firmware\n"
+         "                 MM_PHYSICAL_BOUNDARY=0): the sensors never see the\n"
+         "                 boundary the file draws (no echo), only interior\n"
+         "                 walls; it still blocks planning\n"
+         "  --physical-boundary\n"
+         "                 the boundary is a real wall the sensors see\n"
+         "                 (MM_PHYSICAL_BOUNDARY=1)\n"
+         "                 default: the firmware config, currently "
+      << (cfg::kPhysicalBoundary ? "--physical-boundary" : "--open-floor")
+      << "\n"
          "  --out file     output HTML path (default tools/sim/out/<maze>.html)\n";
 }
 
@@ -88,9 +98,13 @@ std::vector<uint8_t> encodeWalls(const Maze& maze) {
       const Cell cell{r, c};
       for (uint8_t d = 0; d < kDirectionCount; ++d) {
         const Direction dir = kAllDirections[d];
+        // A virtual (open-floor) boundary is a wall that is never "known"
+        // (Maze::reset): still drawn as a wall, it blocks planning.
         uint8_t code = 0;
-        if (maze.isKnown(cell, dir)) {
-          code = maze.hasWall(cell, dir) ? 2 : 1;
+        if (maze.hasWall(cell, dir)) {
+          code = 2;
+        } else if (maze.isKnown(cell, dir)) {
+          code = 1;
         }
         out[(static_cast<size_t>(r) * maze.cols() + c) * 4 + d] = code;
       }
@@ -166,6 +180,7 @@ int main(int argc, char** argv) {
   std::optional<Relative> deadSensor;
   std::string deadSensorLabel;
   std::string outPath;
+  bool physicalBoundary = cfg::kPhysicalBoundary;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -195,6 +210,10 @@ int main(int argc, char** argv) {
         std::cerr << "error: --dead-sensor must be L, F or R\n";
         return 1;
       }
+    } else if (arg == "--open-floor") {
+      physicalBoundary = false;
+    } else if (arg == "--physical-boundary") {
+      physicalBoundary = true;
     } else if (arg == "--out") {
       outPath = next("--out");
     } else if (arg == "-h" || arg == "--help") {
@@ -253,7 +272,8 @@ int main(int argc, char** argv) {
 
   const ExplorerParams params = {cfg::kWallFlipObservations,
                                  cfg::kSensorFailurePasses,
-                                 cfg::kExplorationBudgetFactor};
+                                 cfg::kExplorationBudgetFactor,
+                                 physicalBoundary};
   Explorer explorer;
   Status status =
       explorer.reset(pm.rows, pm.cols, Pose{start, startHeading}, goal, params);
@@ -278,6 +298,7 @@ int main(int argc, char** argv) {
   data.noise = noise;
   data.seed = seed;
   data.deadSensor = deadSensorLabel;
+  data.physicalBoundary = physicalBoundary;
 
   constexpr uint32_t kSafetySteps = 20000;
   bool done = false;
@@ -300,9 +321,16 @@ int main(int argc, char** argv) {
     SideObservation obs[3];
     for (uint8_t i = 0; i < 3; ++i) {
       const Direction absDir = rotate(pose.heading, kSides[i]);
-      const bool trueWall = pm.truth.hasWall(pose.cell, absDir);
+      // Open floor: the boundary the ASCII file draws is not physically
+      // there, so the sensors only ever see interior walls, and a side with
+      // nothing in it is silent (no echo at all - the hard case for the
+      // sensor-failure check). Physical boundary: every drawn wall is real
+      // and some echo always comes back (walls within range).
+      const bool trueWall =
+          pm.truth.hasWall(pose.cell, absDir) &&
+          (physicalBoundary || !pm.truth.isBoundary(pose.cell, absDir));
       bool wall = trueWall;
-      bool anyEcho = true;
+      bool anyEcho = physicalBoundary || trueWall;
       if (deadSensor.has_value() && *deadSensor == kSides[i]) {
         anyEcho = false;
         wall = false;
@@ -388,6 +416,8 @@ int main(int argc, char** argv) {
             << static_cast<int>(goal.col) << ")\n";
   std::cout << "noise=" << noise << " seed=" << seed
             << (deadSensor.has_value() ? " dead-sensor=" + deadSensorLabel : "")
+            << " mode="
+            << (physicalBoundary ? "physical-boundary" : "open-floor")
             << "\n";
   std::cout << "result: " << data.outcomeText << "\n\n";
 

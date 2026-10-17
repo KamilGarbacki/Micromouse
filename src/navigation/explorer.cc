@@ -9,7 +9,8 @@ Status Explorer::reset(const uint8_t rows, const uint8_t cols,
   budget_ = 0;
   for (uint8_t& streak : implausibleStreak_) streak = 0;
 
-  const Status status = maze_.reset(rows, cols, params.wallFlipObservations);
+  const Status status = maze_.reset(rows, cols, params.wallFlipObservations,
+                                    params.physicalBoundary);
   if (!isOk(status)) return status;
   if (params.sensorFailurePasses == 0 || params.budgetFactor == 0) {
     return Status::kInvalidArgument;
@@ -39,8 +40,10 @@ Status Explorer::observe(const SideObservation* const observations,
 
     if (obs.anyEcho) {
       streak = 0;
-    } else if (maze_.hasWall(pose_.cell, dir)) {
-      // Silence facing a known wall: do not trust it, do not map it.
+    } else if (physicalWall(pose_.cell, dir)) {
+      // Silence facing a known physical wall: do not trust it, do not map
+      // it. (A virtual boundary is silent by nature: neutral, and the
+      // setWall() below ignores the boundary anyway.)
       if (++streak >= sensorFailurePasses_) return Status::kSensorFailure;
       continue;
     }

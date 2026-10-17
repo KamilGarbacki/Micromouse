@@ -1,6 +1,7 @@
 // Host tests: navigation/run_log - step encode/decode, absolute-wall
 // derivation, header CRC, interrupted runs, truncation, invalid/blank
 // EEPROM and the EEPROM region not overlapping the calibration records.
+#include <stddef.h>
 #include <string.h>
 #include <unity.h>
 
@@ -143,6 +144,52 @@ void test_readme_run_log_example_abs_walls() {
   TEST_ASSERT_FALSE(out[static_cast<uint8_t>(Direction::kLeft)]);
 }
 
+void test_boundary_sides_and_wall_symbols() {
+  const auto bit = [](const Direction d) {
+    return static_cast<uint8_t>(1u << static_cast<uint8_t>(d));
+  };
+  // 5x3: (4,0) bottom-left corner -> S and W; (0,2) top-right -> N and E;
+  // (2,1) interior -> none; a 1x1 maze -> all four.
+  TEST_ASSERT_EQUAL_HEX8(bit(Direction::kDown) | bit(Direction::kLeft),
+                         boundarySides({4, 0}, 5, 3));
+  TEST_ASSERT_EQUAL_HEX8(bit(Direction::kUp) | bit(Direction::kRight),
+                         boundarySides({0, 2}, 5, 3));
+  TEST_ASSERT_EQUAL_HEX8(0, boundarySides({2, 1}, 5, 3));
+  TEST_ASSERT_EQUAL_HEX8(0x0F, boundarySides({0, 0}, 1, 1));
+
+  // '+' only where the virtual mask says so, regardless of the stored bit;
+  // otherwise '#' / '.'.
+  const uint8_t virtualSides = boundarySides({4, 0}, 5, 3);
+  TEST_ASSERT_EQUAL_CHAR('+', runLogWallSymbol(virtualSides, 3, false));
+  TEST_ASSERT_EQUAL_CHAR('+', runLogWallSymbol(virtualSides, 2, true));
+  TEST_ASSERT_EQUAL_CHAR('.', runLogWallSymbol(virtualSides, 0, false));
+  TEST_ASSERT_EQUAL_CHAR('#', runLogWallSymbol(virtualSides, 1, true));
+  // Physical-boundary log: no virtual sides, the stored bit decides.
+  TEST_ASSERT_EQUAL_CHAR('#', runLogWallSymbol(0, 3, true));
+  TEST_ASSERT_EQUAL_CHAR('.', runLogWallSymbol(0, 3, false));
+}
+
+void test_open_floor_flag_is_stored_and_crc_valid() {
+  RunLog log(fakeRead, fakeWrite, kRunLogAddress, kRunLogCapacity);
+  log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2},
+               /*openFloor=*/true);
+  log.appendStep(makeStep(4, 0, Direction::kUp, false, false, false,
+                          Direction::kUp));
+  log.finishGoal({0, 2}, Direction::kUp);
+  RunLogHeader header{};
+  TEST_ASSERT_EQUAL(RunLogValidity::kValid,
+                    readRunLog(fakeRead, kRunLogAddress, kRunLogCapacity,
+                               header));
+  TEST_ASSERT_EQUAL_HEX8(kRunLogOpenFloorFlag, header.flags);
+
+  // The default (and every log written before the flag existed): clear.
+  log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2});
+  TEST_ASSERT_EQUAL(RunLogValidity::kValid,
+                    readRunLog(fakeRead, kRunLogAddress, kRunLogCapacity,
+                               header));
+  TEST_ASSERT_EQUAL_HEX8(0, header.flags);
+}
+
 // --- Header CRC / validity -----------------------------------------------
 
 void test_header_crc_detects_corruption() {
@@ -152,7 +199,7 @@ void test_header_crc_detects_corruption() {
                          Direction::kUp));
   log.appendStep(makeStep(3, 0, Direction::kUp, true, false, false,
                          Direction::kUp));
-  log.finishGoal();
+  log.finishGoal({0, 2}, Direction::kUp);
 
   RunLogHeader header{};
   TEST_ASSERT_EQUAL(RunLogValidity::kValid,
@@ -165,10 +212,104 @@ void test_header_crc_detects_corruption() {
 
   setUp();
   log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2});
-  log.finishGoal();
+  log.finishGoal({0, 2}, Direction::kUp);
   gEeprom[9] ^= 0x01;  // goalRow, inside the CRC-covered header prefix
   TEST_ASSERT_EQUAL(RunLogValidity::kBadCrc,
                     readRunLog(fakeRead, 0, 16, header));
+}
+
+// --- Torn-write recovery (power loss mid-write) -----------------------------
+//
+// hal::eepromWrite (and the fake below) commits bytes in ascending address
+// order, so within one RunLog::appendStep()/finishGoal()/finishFault() call
+// the crc (the header's last field) is always the LAST byte pair written.
+// These tests forge exactly that: the fields before the crc already
+// reflect the new write, but the crc field still holds the PREVIOUS,
+// fully-written value - and check that readRunLog() recovers the previous,
+// consistent state instead of reporting kBadCrc (see the comment in
+// navigation/run_log.cc).
+
+void test_torn_append_step_recovers_previous_step_count() {
+  RunLog log(fakeRead, fakeWrite, 0, 16);
+  log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2});
+  log.appendStep(makeStep(4, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  log.appendStep(makeStep(3, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  RunLogHeader before{};  // stepCount = 2, crc valid for 2 steps
+  fakeRead(0, &before, sizeof(before));
+
+  // The 3rd step's bytes and the new stepCount (3) commit; the crc write
+  // never arrives.
+  log.appendStep(makeStep(2, 0, Direction::kUp, true, true, false,
+                         Direction::kRight));
+  fakeWrite(offsetof(RunLogHeader, crc), &before.crc, sizeof(before.crc));
+
+  RunLogHeader header{};
+  TEST_ASSERT_EQUAL(RunLogValidity::kValid,
+                    readRunLog(fakeRead, 0, 16, header));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(RunLogState::kInProgress),
+                          header.state);
+  TEST_ASSERT_EQUAL_UINT16(2, header.stepCount);  // the 3rd step is dropped
+  TEST_ASSERT_EQUAL_UINT8(4, readRunLogStep(fakeRead, 0, 0).cell.row);
+  TEST_ASSERT_EQUAL_UINT8(3, readRunLogStep(fakeRead, 0, 1).cell.row);
+}
+
+void test_torn_finish_goal_recovers_interrupted_run() {
+  RunLog log(fakeRead, fakeWrite, 0, 16);
+  log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2});
+  log.appendStep(makeStep(4, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  log.appendStep(makeStep(3, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  RunLogHeader before{};  // in progress, crc valid for 2 steps
+  fakeRead(0, &before, sizeof(before));
+
+  // state/outcome commit; the crc write never arrives.
+  log.finishGoal({0, 2}, Direction::kUp);
+  fakeWrite(offsetof(RunLogHeader, crc), &before.crc, sizeof(before.crc));
+
+  RunLogHeader header{};
+  // readRunLog() recovers the pre-finish header: state is back to
+  // "in progress", so printStoredRunLog() prints "(interrupted)" instead
+  // of an END RUN line (see test_interrupted_run_has_no_end_marker above
+  // for the same state -> marker link; printing itself needs hal::log,
+  // which is not available on the host).
+  TEST_ASSERT_EQUAL(RunLogValidity::kValid,
+                    readRunLog(fakeRead, 0, 16, header));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(RunLogState::kInProgress),
+                          header.state);
+  TEST_ASSERT_EQUAL_UINT16(2, header.stepCount);
+}
+
+void test_torn_finish_fault_after_truncation_recovers_interrupted_run() {
+  // Combines a torn finish with a truncated log: the recovered header must
+  // still show truncated (flags is untouched by finish*()) alongside the
+  // reverted state/outcome/fault fields.
+  constexpr uint16_t kCapacity = 2;
+  RunLog log(fakeRead, fakeWrite, 0, kCapacity);
+  log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2});
+  log.appendStep(makeStep(4, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  log.appendStep(makeStep(3, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  log.appendStep(makeStep(2, 0, Direction::kUp, true, true, false,
+                         Direction::kRight));  // beyond capacity: truncated
+  TEST_ASSERT_TRUE(log.truncated());
+  RunLogHeader before{};  // in progress, truncated, crc valid for 2 steps
+  fakeRead(0, &before, sizeof(before));
+
+  // state/outcome/fault fields commit; the crc write never arrives.
+  log.finishFault(Status::kExplorationLimit, Cell{2, 0}, Direction::kUp);
+  fakeWrite(offsetof(RunLogHeader, crc), &before.crc, sizeof(before.crc));
+
+  RunLogHeader header{};
+  TEST_ASSERT_EQUAL(RunLogValidity::kValid,
+                    readRunLog(fakeRead, 0, kCapacity, header));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(RunLogState::kInProgress),
+                          header.state);
+  TEST_ASSERT_TRUE((header.flags & kRunLogTruncatedFlag) != 0);
+  TEST_ASSERT_EQUAL_UINT16(kCapacity, header.stepCount);
 }
 
 // --- Interrupted run -------------------------------------------------------
@@ -202,7 +343,7 @@ void test_truncation_at_capacity_keeps_the_run_going() {
   }
   TEST_ASSERT_EQUAL_UINT16(kCapacity, log.stepCount());
   TEST_ASSERT_TRUE(log.truncated());
-  log.finishGoal();
+  log.finishGoal({0, 2}, Direction::kUp);
 
   RunLogHeader header{};
   TEST_ASSERT_EQUAL(RunLogValidity::kValid,
@@ -211,6 +352,33 @@ void test_truncation_at_capacity_keeps_the_run_going() {
   TEST_ASSERT_TRUE((header.flags & kRunLogTruncatedFlag) != 0);
   // The two steps beyond capacity were simply not written.
   TEST_ASSERT_EQUAL_UINT8(2, readRunLogStep(fakeRead, 0, 2).cell.row);
+}
+
+void test_truncation_crc_is_valid_before_any_finish() {
+  // Covers the fix in RunLog::appendStep: the truncation branch must
+  // recompute the crc (flags is CRC-covered), or a read right after hitting
+  // capacity - before finishGoal()/finishFault() ever runs - would wrongly
+  // report kBadCrc even though nothing is actually corrupt.
+  constexpr uint16_t kCapacity = 2;
+  RunLog log(fakeRead, fakeWrite, 0, kCapacity);
+  log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2});
+  log.appendStep(makeStep(4, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  log.appendStep(makeStep(3, 0, Direction::kUp, true, false, false,
+                         Direction::kUp));
+  log.appendStep(makeStep(2, 0, Direction::kUp, true, true, false,
+                         Direction::kRight));  // beyond capacity: truncated
+  TEST_ASSERT_TRUE(log.truncated());
+  // No finishGoal()/finishFault(): read the log exactly as it stands right
+  // after truncation.
+
+  RunLogHeader header{};
+  TEST_ASSERT_EQUAL(RunLogValidity::kValid,
+                    readRunLog(fakeRead, 0, kCapacity, header));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(RunLogState::kInProgress),
+                          header.state);
+  TEST_ASSERT_TRUE((header.flags & kRunLogTruncatedFlag) != 0);
+  TEST_ASSERT_EQUAL_UINT16(kCapacity, header.stepCount);
 }
 
 // --- Invalid / blank EEPROM -------------------------------------------------
@@ -229,7 +397,7 @@ void test_blank_and_foreign_eeprom_are_rejected() {
 
   RunLog log(fakeRead, fakeWrite, 0, 16);
   log.startRun(5, 3, Pose{{4, 0}, Direction::kUp}, Cell{0, 2});
-  log.finishGoal();
+  log.finishGoal({0, 2}, Direction::kUp);
   RunLogHeader good{};
   fakeRead(0, &good, sizeof(good));
   good.version = static_cast<uint8_t>(kRunLogVersion + 1);
@@ -269,7 +437,7 @@ void test_full_run_round_trip_goal_reached() {
       makeStep(1, 2, Direction::kRight, true, false, false, Direction::kUp),
   };
   for (const RunStep& s : steps) log.appendStep(s);
-  log.finishGoal();
+  log.finishGoal({0, 2}, Direction::kUp);
 
   RunLogHeader header{};
   TEST_ASSERT_EQUAL(RunLogValidity::kValid,
@@ -318,9 +486,15 @@ int main() {
   RUN_TEST(test_step_encode_decode_round_trip);
   RUN_TEST(test_absolute_walls_use_boundary_for_the_unsensed_back_side);
   RUN_TEST(test_readme_run_log_example_abs_walls);
+  RUN_TEST(test_boundary_sides_and_wall_symbols);
+  RUN_TEST(test_open_floor_flag_is_stored_and_crc_valid);
   RUN_TEST(test_header_crc_detects_corruption);
+  RUN_TEST(test_torn_append_step_recovers_previous_step_count);
+  RUN_TEST(test_torn_finish_goal_recovers_interrupted_run);
+  RUN_TEST(test_torn_finish_fault_after_truncation_recovers_interrupted_run);
   RUN_TEST(test_interrupted_run_has_no_end_marker);
   RUN_TEST(test_truncation_at_capacity_keeps_the_run_going);
+  RUN_TEST(test_truncation_crc_is_valid_before_any_finish);
   RUN_TEST(test_blank_and_foreign_eeprom_are_rejected);
   RUN_TEST(test_run_log_region_does_not_overlap_calibration_and_fits);
   RUN_TEST(test_full_run_round_trip_goal_reached);

@@ -52,23 +52,21 @@ struct MoveStats {
 
 void logMove(const int32_t target, const int32_t left, const int32_t right,
              const Status status, const bool settled, const MoveStats& stats) {
-  if (isOk(status)) {
-    log::fmt(F("move"));
-  } else {
-    log::fmt(F("move FAILED status=%u"), static_cast<unsigned int>(status));
-  }
-  log::fmt(F(" target=%l L=%l R=%l over=%l"), static_cast<long>(target),
+  // The Status code first (0 = OK): one call, no OK / FAIL branch with two
+  // strings (flash, README "Flash budget").
+  log::fmt(F("move %u target=%l L=%l R=%l over=%l"),
+           static_cast<unsigned int>(status), static_cast<long>(target),
            static_cast<long>(left), static_cast<long>(right),
            static_cast<long>((left + right) / 2 - target));
   if (stats.cruiseSamples > 0) {
-    log::fmt(F(" cruisePwm=%2 cruiseV=%2"),
+    log::fmt(F(" pwm=%2 v=%2"),
              static_cast<double>(stats.cruisePwmSum / stats.cruiseSamples),
              static_cast<double>(stats.cruiseSpeedSum / stats.cruiseSamples));
   }
   if (stats.overruns > 0) {
-    log::fmt(F(" overruns=%u"), static_cast<unsigned int>(stats.overruns));
+    log::fmt(F(" ovr=%u"), static_cast<unsigned int>(stats.overruns));
   }
-  if (!settled) log::fmt(F(" settle=TIMEOUT"));
+  if (!settled) log::fmt(F(" TIMEOUT"));
   log::println();
 }
 
@@ -320,10 +318,11 @@ MoveReport MotionController::move(const int32_t targetTicks,
   return result;
 }
 
-void MotionController::logCarry(const bool settled) const {
+void MotionController::logCarry() const {
   if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-    log::fmtln(F("H=%l%s"), static_cast<long>(headingCarry_),
-               settled ? F("") : F(" (unsettled)"));
+    // (No " !settled" suffix: the move line right before it already says
+    // TIMEOUT for that move - dropped for flash, README "Flash budget".)
+    log::fmtln(F("H=%l"), static_cast<long>(headingCarry_));
   }
 }
 
@@ -341,7 +340,7 @@ Status MotionController::driveForward(const CenteringWalls& walls,
   headingCarry_ =
       heading::carryAfterForward(headingCarry_, report.left, report.right,
                                  cfg::kHeadingCarryLimit);
-  logCarry(report.settled);
+  logCarry();
   return report.status;
 }
 
@@ -367,7 +366,7 @@ Status MotionController::turn(const TurnDirection direction,
   headingCarry_ = heading::carryAfterTurn(headingCarry_, sign, report.left,
                                          report.right, nominal,
                                          cfg::kHeadingCarryLimit);
-  logCarry(report.settled);
+  logCarry();
   return report.status;
 }
 
@@ -390,7 +389,7 @@ Status MotionController::adjustStraight(const int32_t signedTicks,
   report.carryBefore = headingCarry_;
   headingCarry_ = heading::carryAfterStraight(
       headingCarry_, dir, report.left, report.right, cfg::kHeadingCarryLimit);
-  logCarry(report.settled);
+  logCarry();
   return report.status;
 }
 

@@ -126,7 +126,7 @@ void OnlineLearning::onForward(const MoveReport& report,
       cfg::kForwardBrakeMaxOverTicks);
   dirty_ = true;
   if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-    log::fmtln(F("brake f=%1 t=%1"),
+    log::fmtln(F("brk f=%1 t=%1"),
                static_cast<double>(rec.brakeLeadForward),
                static_cast<double>(rec.brakeLeadTurn));
   }
@@ -200,6 +200,19 @@ void OnlineLearning::onForward(const MoveReport& report,
   }
 }
 
+uint8_t OnlineLearning::sideWallMask(const Explorer& explorer,
+                                     const Direction heading) {
+  const Cell cell = explorer.pose().cell;
+  uint8_t mask = 0;
+  if (explorer.physicalWall(cell, rotate(heading, Relative::kLeft))) {
+    mask |= kSideLeftBit;
+  }
+  if (explorer.physicalWall(cell, rotate(heading, Relative::kRight))) {
+    mask |= kSideRightBit;
+  }
+  return mask;
+}
+
 void OnlineLearning::onAdjusted(const float signedMm) {
   const float total = pendingAdjustMm_ + util::absValue(signedMm) + 0.5f;
   pendingAdjustMm_ = static_cast<uint8_t>(total > 255.0f ? 255.0f : total);
@@ -258,7 +271,7 @@ void OnlineLearning::confirm(const bool frontWall, const bool leftWall,
   }
   const float eps = sum / count;
   if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-    log::fmtln(F("learn eps=%2 curve=%3"),
+    log::fmtln(F("learn eps=%2 c=%3"),
                static_cast<double>(eps * 1000.0f),
                static_cast<double>(turnLearner_.curvatureRadPerMm() * 1e6f));
   }
@@ -291,7 +304,7 @@ void OnlineLearning::learnPitch() {
   if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
     // j=0: still accumulating (P and delta not yet separable); n=<cells>
     // a = from an alignment, s = from the start cell.
-    log::fmtln(F("learn pitch %c n=%u%c y/a=%2 P=%2 d=%2 j=%u use=%l"),
+    log::fmtln(F("learn pitch %c n=%u%c ya=%2 P=%2 d=%2 j=%u u=%l"),
                outcomeTag(outcome),
                static_cast<unsigned int>(pendingPitchCells_),
                pendingPitchAligned_ ? 'a' : 's',
@@ -322,7 +335,7 @@ void OnlineLearning::learn(learning::RobustEstimator& estimator, float& value,
     // The wheel scale is printed in um per tick (3 decimals of mm are too
     // coarse for it). The estimate is in force once n >= minSamples.
     const float unit = prior < 1.0f ? 1000.0f : 1.0f;
-    log::fmtln(F("learn %s %c sample=%2 est=%2 n=%u"), name,
+    log::fmtln(F("learn %s %c s=%2 e=%2 n=%u"), name,
                outcomeTag(outcome), static_cast<double>(sample * unit),
                static_cast<double>(value * unit),
                static_cast<unsigned int>(samples));

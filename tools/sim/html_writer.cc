@@ -79,6 +79,7 @@ std::string dataToJson(const SimData& d) {
   }
   os << "],\"meta\":{\"mazeFile\":\"" << jsonEscape(d.mazeFile)
      << "\",\"noise\":" << d.noise << ",\"seed\":" << d.seed
+     << ",\"physicalBoundary\":" << (d.physicalBoundary ? "true" : "false")
      << ",\"deadSensor\":\"" << jsonEscape(d.deadSensor)
      << "\",\"outcome\":\"" << jsonEscape(d.outcomeText) << "\"}}";
   return os.str();
@@ -147,6 +148,8 @@ document.getElementById('meta').textContent =
   'maze: ' + DATA.meta.mazeFile + '  |  noise=' + DATA.meta.noise +
   '  seed=' + DATA.meta.seed +
   (DATA.meta.deadSensor ? '  dead-sensor=' + DATA.meta.deadSensor : '') +
+  (DATA.meta.physicalBoundary ? '  |  physical boundary'
+                              : '  |  open floor (virtual boundary)') +
   '  |  ' + rows + 'x' + cols;
 
 function cellX(c) { return margin + c * cellPx; }

@@ -3,7 +3,8 @@
 namespace micromouse {
 
 Status Maze::reset(const uint8_t rows, const uint8_t cols,
-                   const uint8_t flipObservations) {
+                   const uint8_t flipObservations,
+                   const bool physicalBoundary) {
   rows_ = 0;
   cols_ = 0;
   for (uint16_t i = 0; i < kMaxCells; ++i) {
@@ -18,13 +19,19 @@ Status Maze::reset(const uint8_t rows, const uint8_t cols,
   rows_ = rows;
   cols_ = cols;
 
-  // The outer boundary is a known wall.
+  // The outer boundary is a wall: known if physical, else virtual (the
+  // wall bit without the known bit).
   for (uint8_t row = 0; row < rows_; ++row) {
     for (uint8_t col = 0; col < cols_; ++col) {
       const Cell cell{row, col};
       Cell unused{};
       for (const Direction dir : kAllDirections) {
-        if (!neighbour(cell, dir, unused)) record(indexOf(cell), dir, true);
+        if (neighbour(cell, dir, unused)) continue;
+        if (physicalBoundary) {
+          record(indexOf(cell), dir, true);
+        } else {
+          sides_[indexOf(cell)] |= wallBit(dir);
+        }
       }
     }
   }
@@ -87,6 +94,12 @@ bool Maze::isKnown(const Cell cell, const Direction dir) const {
 bool Maze::hasWall(const Cell cell, const Direction dir) const {
   if (!contains(cell)) return true;
   return (sides_[indexOf(cell)] & wallBit(dir)) != 0;
+}
+
+bool Maze::hasPhysicalWall(const Cell cell, const Direction dir) const {
+  // (Reuses the two accessors rather than its own bit test: smaller on the
+  // AVR, see README "Flash budget".)
+  return hasWall(cell, dir) && isKnown(cell, dir);
 }
 
 void Maze::record(const CellIndex index, const Direction dir,

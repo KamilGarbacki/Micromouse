@@ -7,6 +7,7 @@
 #include "app/online_learning.h"
 #include "config/config.h"
 #include "control/calibration.h"
+#include "navigation/explorer.h"
 
 using namespace micromouse;
 
@@ -235,6 +236,87 @@ void test_scale_ruler_gate_vs_near_wall_gate() {
   TEST_ASSERT_EQUAL_UINT8(1, learning::pitchRows(far.flags));
 }
 
+namespace {
+
+/// Like plainMoveTowardsWall(20, 100) (a wheel-scale AND a pitch sample
+/// pending), but confirmed through confirmAt() with the walls the
+/// explorer's map has around its pose, as RobotApp does.
+LearnedRecord plainMoveConfirmedAt(const Explorer& explorer) {
+  Calibration cal = calibration::defaults();
+  OnlineLearning learning(cal);
+  learning.reset();
+  learning.onAligned(AlignResult::kCentred, 20.0f);
+  const int32_t ticks = calibration::ticksPerCell(cal);
+  ForwardObservation obs = {};
+  obs.turnedBefore = false;
+  obs.frontAfterMm = 100.0f;
+  obs.frontBeforeMm = 100.0f + ticks * calibration::mmPerTick(cal);
+  learning.onForward(MoveReport{Status::kOk, true, ticks, ticks, ticks, 0,
+                                0.0f},
+                     obs);
+  learning.confirmAt(explorer);
+  return cal.learned;
+}
+
+ExplorerParams params(const bool physicalBoundary) {
+  return ExplorerParams{2, 3, 4, physicalBoundary};
+}
+
+}  // namespace
+
+void test_no_front_samples_against_a_virtual_boundary() {
+  // (0,1) facing Up: the wall ahead is the north edge of the grid.
+  const Pose pose = {{0, 1}, Direction::kUp};
+  Explorer open;
+  open.reset(3, 3, pose, Cell{2, 2}, params(false));
+  LearnedRecord rec = plainMoveConfirmedAt(open);
+  TEST_ASSERT_EQUAL_UINT16(0, rec.scaleSamples);
+  TEST_ASSERT_EQUAL_UINT8(0, learning::pitchRows(rec.flags));
+
+  // Physical boundary: the same edge is a real wall -> both samples taken.
+  Explorer walled;
+  walled.reset(3, 3, pose, Cell{2, 2}, params(true));
+  rec = plainMoveConfirmedAt(walled);
+  TEST_ASSERT_EQUAL_UINT16(1, rec.scaleSamples);
+  TEST_ASSERT_EQUAL_UINT8(1, learning::pitchRows(rec.flags));
+
+  // Open floor with a SENSED interior wall ahead: samples taken.
+  Explorer interior;
+  interior.reset(3, 3, Pose{{1, 1}, Direction::kUp}, Cell{2, 2},
+                 params(false));
+  const SideObservation wallAhead[1] = {{Relative::kForward, true, true}};
+  interior.observe(wallAhead, 1);
+  rec = plainMoveConfirmedAt(interior);
+  TEST_ASSERT_EQUAL_UINT16(1, rec.scaleSamples);
+  TEST_ASSERT_EQUAL_UINT8(1, learning::pitchRows(rec.flags));
+}
+
+void test_side_wall_mask_ignores_a_virtual_boundary() {
+  // (1,0): the west side is the grid edge. Driving Up, it is on the left.
+  const Pose pose = {{1, 0}, Direction::kUp};
+  Explorer open;
+  open.reset(3, 3, pose, Cell{0, 2}, params(false));
+  TEST_ASSERT_EQUAL_UINT8(0, OnlineLearning::sideWallMask(open,
+                                                          Direction::kUp));
+  // Driving Down it is on the right: still no reference.
+  TEST_ASSERT_EQUAL_UINT8(0, OnlineLearning::sideWallMask(open,
+                                                          Direction::kDown));
+  // A sensed interior wall on the right (east side) is a reference.
+  const SideObservation wallRight[1] = {{Relative::kRight, true, true}};
+  open.observe(wallRight, 1);
+  TEST_ASSERT_EQUAL_UINT8(kSideRightBit,
+                          OnlineLearning::sideWallMask(open, Direction::kUp));
+
+  Explorer walled;
+  walled.reset(3, 3, pose, Cell{0, 2}, params(true));
+  TEST_ASSERT_EQUAL_UINT8(kSideLeftBit,
+                          OnlineLearning::sideWallMask(walled,
+                                                       Direction::kUp));
+  TEST_ASSERT_EQUAL_UINT8(kSideRightBit,
+                          OnlineLearning::sideWallMask(walled,
+                                                       Direction::kDown));
+}
+
 void test_lost_alignment_and_90_deg_turn_drop_the_reference() {
   World w;
   w.learning.reset();
@@ -276,5 +358,7 @@ int main() {
   RUN_TEST(test_lost_alignment_and_90_deg_turn_drop_the_reference);
   RUN_TEST(test_u_turn_mid_corridor_drops_the_reference);
   RUN_TEST(test_scale_ruler_gate_vs_near_wall_gate);
+  RUN_TEST(test_no_front_samples_against_a_virtual_boundary);
+  RUN_TEST(test_side_wall_mask_ignores_a_virtual_boundary);
   return UNITY_END();
 }

@@ -224,7 +224,8 @@ void RobotApp::runStartRun() {
   // START RUN: write the header "in progress, 0 steps" first, so even a
   // reset()/budget failure below is captured as a FAULT in the log.
   runLog_.startRun(cfg::kMazeRows, cfg::kMazeCols,
-                  Pose{cfg::kStartCell, cfg::kStartHeading}, cfg::kGoalCell);
+                  Pose{cfg::kStartCell, cfg::kStartHeading}, cfg::kGoalCell,
+                  !cfg::kPhysicalBoundary);
   if constexpr (cfg::logEnabled(LogLevel::kInfo)) {
     printRunLogStart(cfg::kMazeRows, cfg::kMazeCols,
                     Pose{cfg::kStartCell, cfg::kStartHeading},
@@ -233,7 +234,8 @@ void RobotApp::runStartRun() {
 
   const ExplorerParams params = {cfg::kWallFlipObservations,
                                  cfg::kSensorFailurePasses,
-                                 cfg::kExplorationBudgetFactor};
+                                 cfg::kExplorationBudgetFactor,
+                                 cfg::kPhysicalBoundary};
   const Status status =
       explorer_.reset(cfg::kMazeRows, cfg::kMazeCols,
                       Pose{cfg::kStartCell, cfg::kStartHeading},
@@ -248,13 +250,8 @@ void RobotApp::runStartRun() {
 void RobotApp::confirmLearning() {
   if (!cfg::kOnlineLearningEnabled) return;
   // The map knows the walls around the current cell: commit the samples of
-  // the last move whose walls it confirms.
-  const Maze& maze = explorer_.maze();
-  const Pose pose = explorer_.pose();
-  learning_.confirm(
-      maze.hasWall(pose.cell, pose.heading),
-      maze.hasWall(pose.cell, rotate(pose.heading, Relative::kLeft)),
-      maze.hasWall(pose.cell, rotate(pose.heading, Relative::kRight)));
+  // the last move whose (physical, i.e. sensed) walls it confirms.
+  learning_.confirmAt(explorer_);
   if (learning_.saveDue()) saveLearned();
 }
 
@@ -281,14 +278,14 @@ void RobotApp::runSense() {
   const Status status = explorer_.observe(observations, kSonarCount);
 
   if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-    log::print(F("sense L/F/R cm="));
+    log::print(F("sense="));
     for (uint8_t i = 0; i < kSonarCount; ++i) {
       if (readings[i].medianUs == kFarUs) {
         log::print(F(" far"));
       } else {
         log::fmt(F(" %1"), static_cast<double>(senseMm(i) / 10.0f));
       }
-      log::print(readings[i].wall ? F("(W)") : F("(-)"));
+      log::print(readings[i].wall ? 'W' : '-');
     }
     log::println();
   }
@@ -323,15 +320,15 @@ void RobotApp::runPlan() {
 }
 
 void RobotApp::logRunStep(const Direction move, const bool noMove) {
+  // Physical walls only (README "Run log"): a virtual open-floor boundary
+  // is stored as open and printed as '+' (kRunLogOpenFloorFlag).
   const Pose pose = explorer_.pose();
-  const Maze& maze = explorer_.maze();
   RunStep step;
   step.cell = pose.cell;
   step.heading = pose.heading;
-  step.wallLeft = maze.hasWall(pose.cell, rotate(pose.heading, Relative::kLeft));
-  step.wallFront = maze.hasWall(pose.cell, pose.heading);
-  step.wallRight =
-      maze.hasWall(pose.cell, rotate(pose.heading, Relative::kRight));
+  step.wallLeft = explorer_.physicalWallAt(Relative::kLeft);
+  step.wallFront = explorer_.physicalWallAt(Relative::kForward);
+  step.wallRight = explorer_.physicalWallAt(Relative::kRight);
   step.move = move;
   step.noMove = noMove;
   runLog_.appendStep(step);
@@ -340,15 +337,16 @@ void RobotApp::logRunStep(const Direction move, const bool noMove) {
 CenteringWalls RobotApp::centeringWallsFor(const Direction heading) const {
   const Direction left = rotate(heading, Relative::kLeft);
   const Direction right = rotate(heading, Relative::kRight);
-  const Maze& maze = explorer_.maze();
+  // Physical walls only: a virtual open-floor boundary gives no echo to
+  // centre on.
   const Cell cell = explorer_.pose().cell;
   CenteringWalls walls = {{false, false}, {false, false}};
-  walls.current =
-      SideWalls{maze.hasWall(cell, left), maze.hasWall(cell, right)};
+  walls.current = SideWalls{explorer_.physicalWall(cell, left),
+                            explorer_.physicalWall(cell, right)};
   Cell next{};
-  if (maze.neighbour(cell, heading, next)) {
-    walls.next =
-        SideWalls{maze.hasWall(next, left), maze.hasWall(next, right)};
+  if (explorer_.maze().neighbour(cell, heading, next)) {
+    walls.next = SideWalls{explorer_.physicalWall(next, left),
+                           explorer_.physicalWall(next, right)};
   }
   return walls;
 }
@@ -379,21 +377,15 @@ void RobotApp::runMove() {
     }
   }
 
-  // Learning: side walls known beside the start cell in the new heading,
-  // and their distances at the start of the straight move (after a turn
-  // the SENSE readings face the wrong way, so range again).
+  // Learning: physical side walls known beside the start cell in the new
+  // heading (never a virtual open-floor boundary), and their distances at
+  // the start of the straight move (after a turn the SENSE readings face
+  // the wrong way, so range again).
   ForwardObservation obs = {};
   obs.turnedBefore = turned;
   obs.frontBeforeMm = senseMm(kFrontIndex);
   if (cfg::kOnlineLearningEnabled && isOk(status)) {
-    const Maze& maze = explorer_.maze();
-    const Cell cell = explorer_.pose().cell;
-    if (maze.hasWall(cell, rotate(plannedDirection_, Relative::kLeft))) {
-      obs.sideMask |= kSideLeftBit;
-    }
-    if (maze.hasWall(cell, rotate(plannedDirection_, Relative::kRight))) {
-      obs.sideMask |= kSideRightBit;
-    }
+    obs.sideMask = OnlineLearning::sideWallMask(explorer_, plannedDirection_);
     float start[kSonarCount] = {senseMm(0), senseMm(1), senseMm(2)};
     if (turned && obs.sideMask != 0) {
       uint8_t mask = 0;
@@ -468,14 +460,12 @@ AlignResult RobotApp::alignToFrontWall(float frontMm, float& finalFrontMm) {
   finalFrontMm = 0.0f;
   // Only a reading inside the alignment window is "the wall right ahead".
   const float error = frontMm - align.nominalMm;
+  // Decided on the fresh READING, never on the map: a virtual open-floor
+  // boundary (no echo) is never aligned on. (The debug-only "skip <mm>"
+  // print for an out-of-window wall was dropped for flash, see README
+  // "Flash budget"; the SENSE line still shows the front distance.)
   if (!(frontMm > 0.0f) || error > align.maxErrorMm ||
       error < -align.maxErrorMm) {
-    if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-      if (frontMm > 0.0f && frontMm < cfg::kWallThresholdCm * 10.0f) {
-        log::fmtln(F("align skip %1"),
-                   static_cast<double>(frontMm));
-      }
-    }
     return AlignResult::kNotAttempted;
   }
   const UltrasonicSensor* const sensors[kSonarCount] = {
@@ -485,7 +475,7 @@ AlignResult RobotApp::alignToFrontWall(float frontMm, float& finalFrontMm) {
         frontMm, calibration::mmPerTick(calibration_), align);
     if (ticks == 0) break;
     if constexpr (cfg::logEnabled(LogLevel::kDebug)) {
-      log::fmtln(F("align %1 adj=%l"),
+      log::fmtln(F("adj %1 %l"),
                  static_cast<double>(frontMm), static_cast<long>(ticks));
     }
     MoveReport report = {};
@@ -514,7 +504,7 @@ AlignResult RobotApp::alignToFrontWall(float frontMm, float& finalFrontMm) {
 void RobotApp::onGoalReached() {
   motion_.stop();
   // END RUN: goal reached (README "Run log").
-  runLog_.finishGoal();
+  runLog_.finishGoal(explorer_.goal(), explorer_.pose().heading);
   // Wear policy: the learned values are written here (and every
   // kLearnSaveEveryUpdates accepted samples), never per move.
   if (learning_.dirty()) saveLearned();
@@ -543,7 +533,11 @@ void RobotApp::enterFault(const Status status) {
   // last known-good cell (a failed move does not update it, see runMove()).
   const Pose pose = explorer_.pose();
   runLog_.finishFault(status, pose.cell, pose.heading);
-  if constexpr (cfg::logEnabled(LogLevel::kInfo)) {
+  // Same gate as the periodic repeat in runFault() (kError, not kInfo): a
+  // FAULT is itself an error, and should not disappear at MM_LOG_LEVEL=1
+  // while its repeat still shows. Costs nothing in the shipped envs (uno
+  // is kInfo=2, uno_setup/uno_debug are kDebug=3).
+  if constexpr (cfg::logEnabled(LogLevel::kError)) {
     printRunLogEnd(RunOutcome::kFault, status, pose.cell, pose.heading,
                   explorer_.cellsMoved());
   }

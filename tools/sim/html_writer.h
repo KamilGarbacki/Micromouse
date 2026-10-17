@@ -45,6 +45,7 @@ struct SimData {
   double noise = 0.0;
   uint32_t seed = 0;
   std::string deadSensor;  // "", "L", "F" or "R"
+  bool physicalBoundary = false;  // false = open floor (virtual boundary)
   std::string outcomeText;
 };
 
